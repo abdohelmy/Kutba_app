@@ -1,0 +1,15 @@
+.DS_Store
+.env
+.idea/
+.gradle/
+.local/
+**/.venv/
+**/__pycache__/
+**/.pytest_cache/
+**/tests/.runtime/
+**/*.py[cod]
+backend/data/
+backend/khutba.db
+tmp/
+android/local.properties
+android/**/build/
