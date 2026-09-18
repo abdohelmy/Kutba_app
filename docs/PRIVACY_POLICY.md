@@ -4,7 +4,7 @@ Last updated: 18 September 2026
 
 > Draft: replace the bracketed details and confirm the retention and legal arrangements before publishing.
 
-Khutba lets individuals read translated Friday sermons and lets mosque administrators upload, translate, review, and publish them. The app is operated by **[OPERATOR NAME AND ADDRESS]**. For privacy questions or requests, contact **[PRIVACY EMAIL]**.
+Khutba lets individuals read translated Friday sermons and lets mosque administrators upload, translate, review, and publish them. The app is operated by Abdelrahman Mohamed. For privacy questions or requests, contact abdohelmy1995@gmail.com.
 
 ## Information we handle
 
