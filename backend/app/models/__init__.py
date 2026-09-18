@@ -1,10 +1,9 @@
 from app.models.entities import (
     Mosque,
+    MosqueGlossaryTerm,
     Sermon,
     SermonSegment,
     SermonStatus,
-    SourceChunk,
-    TrustedSource,
     User,
     UserRole,
     VerificationStatus,
@@ -12,11 +11,10 @@ from app.models.entities import (
 
 __all__ = [
     "Mosque",
+    "MosqueGlossaryTerm",
     "Sermon",
     "SermonSegment",
     "SermonStatus",
-    "SourceChunk",
-    "TrustedSource",
     "User",
     "UserRole",
     "VerificationStatus",

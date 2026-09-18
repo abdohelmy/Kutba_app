@@ -1,0 +1,19 @@
+[Unit]
+Description=Khutba FastAPI service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=abdohelmy1995
+Group=abdohelmy1995
+WorkingDirectory=/opt/khutba/backend
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/khutba/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers 1 --proxy-headers --forwarded-allow-ips=127.0.0.1
+Restart=always
+RestartSec=5
+TimeoutStopSec=30
+LimitNOFILE=4096
+
+[Install]
+WantedBy=multi-user.target

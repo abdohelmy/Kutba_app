@@ -12,4 +12,10 @@ backend/data/
 backend/khutba.db
 tmp/
 android/local.properties
+android/keystore.properties
+android/upload-keystore.jks
 android/**/build/
+ios/**/xcuserdata/
+ios/**/DerivedData/
+ios/build/
+output/playstore/

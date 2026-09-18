@@ -13,12 +13,12 @@ def main() -> None:
     parser.add_argument("--mosque", required=True)
     parser.add_argument("--city", required=True)
     parser.add_argument("--country", default="DK")
-    parser.add_argument("--email", required=True)
+    parser.add_argument("--username", required=True)
     parser.add_argument("--name", required=True)
     parser.add_argument("--password", required=True)
     args = parser.parse_args()
-    if len(args.password) < 10:
-        parser.error("--password must contain at least 10 characters")
+    if len(args.password) < 6:
+        parser.error("--password must contain at least 6 characters")
 
     Base.metadata.create_all(bind=engine)
     with SessionLocal() as db:
@@ -27,9 +27,15 @@ def main() -> None:
             mosque = Mosque(name=args.mosque, city=args.city, country=args.country.upper())
             db.add(mosque)
             db.flush()
-        user = db.scalar(select(User).where(User.email == args.email.lower()))
+        username = args.username.strip().lower()
+        user = db.scalar(
+            select(User).where(
+                User.username == username,
+                User.role.in_([UserRole.MOSQUE_ADMIN, UserRole.SUPER_ADMIN]),
+            )
+        )
         if user is None:
-            user = User(email=args.email.lower())
+            user = User(username=username)
             db.add(user)
         user.display_name = args.name
         user.password_hash = hash_password(args.password)
@@ -37,7 +43,7 @@ def main() -> None:
         user.mosque_id = mosque.id
         user.is_active = True
         db.commit()
-        print(f"Admin {user.email} is assigned to {mosque.name} ({mosque.id})")
+        print(f"Admin {user.username} is assigned to {mosque.name} ({mosque.id})")
 
 
 if __name__ == "__main__":

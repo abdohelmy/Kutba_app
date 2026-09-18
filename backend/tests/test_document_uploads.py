@@ -17,26 +17,10 @@ def _docx_bytes(*paragraphs: str) -> bytes:
     return output.getvalue()
 
 
-def test_admin_can_upload_docx_source_and_sermon(client, seeded_accounts):
+def test_admin_can_upload_docx_sermon(client, seeded_accounts):
     from conftest import login_headers
 
-    headers = login_headers(client, "admin@example.com", "correct-horse-123")
-    source_document = _docx_bytes(
-        "Approved English reference wording for patience, gratitude, and care for neighbours.",
-        "The mosque review committee has verified this wording for use in translations.",
-    )
-    source = client.post(
-        "/api/v1/admin/sources",
-        headers=headers,
-        data={
-            "title": "Approved terminology",
-            "authority": "Mosque review committee",
-            "language": "en",
-        },
-        files={"file": ("approved-source.docx", source_document, DOCX_MIME_TYPE)},
-    )
-    assert source.status_code == 201, source.text
-
+    headers = login_headers(client, "admin", "correct-horse-123")
     arabic_document = _docx_bytes(
         "خطبة الجمعة: الصبر والشكر",
         "الحمد لله رب العالمين، نحمده ونستعينه ونستغفره، والصلاة والسلام على رسول الله.",
@@ -80,14 +64,45 @@ def test_admin_can_upload_docx_source_and_sermon(client, seeded_accounts):
         assert "فاتقوا الله" in stored.arabic_text
 
 
-def test_rejects_file_whose_extension_does_not_match_content(client, seeded_accounts):
+def test_admin_can_omit_title_and_get_an_inferred_heading(client, seeded_accounts):
     from conftest import login_headers
 
-    headers = login_headers(client, "admin@example.com", "correct-horse-123")
+    headers = login_headers(client, "admin", "correct-horse-123")
+    arabic_document = _docx_bytes(
+        "خطبة الجمعة: الصبر والشكر",
+        "الحمد لله رب العالمين، نحمده ونستعينه ونستغفره، والصلاة والسلام على رسول الله.",
+        "أما بعد، فاتقوا الله عباد الله، واصبروا واشكروا، وأحسنوا إلى الجار والمحتاج.",
+    )
     response = client.post(
-        "/api/v1/admin/sources",
+        "/api/v1/admin/sermons",
         headers=headers,
-        data={"title": "Invalid file", "authority": "Committee", "language": "en"},
+        data={
+            "khutba_date": "2026-08-14",
+            "target_language": "en",
+        },
+        files={"file": ("arabic-khutba.docx", arabic_document, DOCX_MIME_TYPE)},
+    )
+
+    assert response.status_code == 201, response.text
+    assert response.json()["title"] == "الصبر والشكر"
+    with SessionLocal() as db:
+        stored = db.get(Sermon, response.json()["id"])
+        assert stored is not None
+        assert stored.title_is_inferred is True
+
+
+def test_rejects_sermon_whose_extension_does_not_match_content(client, seeded_accounts):
+    from conftest import login_headers
+
+    headers = login_headers(client, "admin", "correct-horse-123")
+    response = client.post(
+        "/api/v1/admin/sermons",
+        headers=headers,
+        data={
+            "title": "Invalid file",
+            "khutba_date": "2026-08-07",
+            "target_language": "en",
+        },
         files={"file": ("not-really-a-pdf.pdf", _docx_bytes("Enough text " * 20), DOCX_MIME_TYPE)},
     )
 

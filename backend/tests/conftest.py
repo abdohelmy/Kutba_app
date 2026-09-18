@@ -41,14 +41,14 @@ def seeded_accounts():
         db.add_all([mosque, other_mosque])
         db.flush()
         admin = User(
-            email="admin@example.com",
+            username="admin",
             display_name="Mosque Reviewer",
             password_hash=hash_password("correct-horse-123"),
             role=UserRole.MOSQUE_ADMIN,
             mosque_id=mosque.id,
         )
         reader = User(
-            email="reader@example.com",
+            username="reader",
             display_name="Reader",
             password_hash=hash_password("reader-password-123"),
             role=UserRole.READER,
@@ -63,7 +63,19 @@ def seeded_accounts():
         }
 
 
-def login_headers(client: TestClient, email: str, password: str) -> dict[str, str]:
-    response = client.post("/api/v1/auth/login", json={"email": email, "password": password})
+def login_headers(
+    client: TestClient,
+    username: str,
+    password: str,
+    account_type: str = "MOSQUE",
+) -> dict[str, str]:
+    response = client.post(
+        "/api/v1/auth/login",
+        json={
+            "username": username,
+            "password": password,
+            "account_type": account_type,
+        },
+    )
     assert response.status_code == 200, response.text
     return {"Authorization": f"Bearer {response.json()['access_token']}"}

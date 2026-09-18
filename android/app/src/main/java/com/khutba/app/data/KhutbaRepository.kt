@@ -3,7 +3,12 @@ package com.khutba.app.data
 import android.content.ContentResolver
 import android.net.Uri
 import android.provider.OpenableColumns
+import com.khutba.app.BuildConfig
 import com.khutba.app.model.LoginRequest
+import com.khutba.app.model.MosqueProfileUpdateRequest
+import com.khutba.app.model.MosqueGlossaryTermRequest
+import com.khutba.app.model.MosqueRegisterRequest
+import com.khutba.app.model.PasswordChangeRequest
 import com.khutba.app.model.RegisterRequest
 import com.khutba.app.model.SegmentReviewRequest
 import com.khutba.app.model.SermonDetail
@@ -11,7 +16,10 @@ import com.khutba.app.model.SermonSummary
 import com.khutba.app.model.SourceTextReviewRequest
 import com.khutba.app.model.User
 import java.net.ConnectException
+import java.net.NoRouteToHostException
+import java.net.SocketException
 import java.net.SocketTimeoutException
+import java.net.UnknownHostException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonPrimitive
@@ -28,33 +36,112 @@ class KhutbaRepository(private val api: KhutbaApi = ApiFactory.api) {
     private fun authorization(): String =
         token?.let { "Bearer $it" } ?: error("The user is not authenticated")
 
-    suspend fun login(email: String, password: String): User {
-        token = api.login(LoginRequest(email.trim(), password)).accessToken
+    suspend fun login(username: String, password: String, accountType: String): User {
+        token = api.login(LoginRequest(username.trim(), password, accountType)).accessToken
         return api.me(authorization())
     }
 
-    suspend fun register(name: String, email: String, password: String): User {
-        api.register(RegisterRequest(email.trim(), name.trim(), password))
-        return login(email, password)
+    suspend fun register(name: String, username: String, password: String): User {
+        api.register(RegisterRequest(username.trim(), name.trim(), password))
+        return login(username, password, "INDIVIDUAL")
+    }
+
+    suspend fun registerMosque(
+        mosqueName: String,
+        city: String,
+        country: String,
+        adminDisplayName: String,
+        username: String,
+        password: String,
+        permissionPassword: String,
+    ): User {
+        api.registerMosque(
+            MosqueRegisterRequest(
+                mosqueName = mosqueName.trim(),
+                city = city.trim(),
+                country = country.trim().uppercase(),
+                adminDisplayName = adminDisplayName.trim(),
+                username = username.trim(),
+                password = password,
+                permissionPassword = permissionPassword,
+            ),
+        )
+        return login(username, password, "MOSQUE")
     }
 
     fun logout() {
         token = null
     }
 
-    suspend fun mosques() = api.mosques(authorization())
+    suspend fun mosques() = api.mosques()
 
     suspend fun publishedSermons(mosqueId: String, language: String?) =
-        api.publishedSermons(authorization(), mosqueId, language?.ifBlank { null })
+        api.publishedSermons(mosqueId, language?.ifBlank { null })
 
     suspend fun publishedSermon(sermonId: String) =
-        api.publishedSermon(authorization(), sermonId)
+        api.publishedSermon(sermonId)
 
-    suspend fun sources() = api.sources(authorization())
+    fun publishedSermonPdfUrl(sermonId: String): Uri =
+        Uri.parse(BuildConfig.API_BASE_URL)
+            .buildUpon()
+            .appendEncodedPath("reader/sermons")
+            .appendPath(sermonId)
+            .appendPath("pdf")
+            .build()
 
     suspend fun adminSermons() = api.adminSermons(authorization())
 
+    suspend fun adminProfile() = api.adminProfile(authorization())
+
+    suspend fun updateMosqueName(mosqueName: String) = api.updateAdminProfile(
+        authorization(),
+        MosqueProfileUpdateRequest(mosqueName.trim()),
+    )
+
+    suspend fun changePassword(currentPassword: String, newPassword: String) =
+        api.changeAdminPassword(
+            authorization(),
+            PasswordChangeRequest(currentPassword, newPassword),
+        )
+
+    suspend fun adminGlossary() = api.adminGlossary(authorization())
+
+    suspend fun saveGlossaryTerm(
+        glossaryTermId: String?,
+        arabicTerm: String,
+        literalTranslation: String,
+        meaning: String,
+        arabicVariations: String,
+        alternativeContextMeanings: String,
+    ) = MosqueGlossaryTermRequest(
+        arabicTerm = arabicTerm.trim(),
+        meaning = meaning.trim(),
+        literalTranslation = literalTranslation.trim(),
+        arabicVariations = arabicVariations.trim(),
+        alternativeContextMeanings = alternativeContextMeanings.trim(),
+    ).let { request ->
+        if (glossaryTermId == null) {
+            api.createGlossaryTerm(authorization(), request)
+        } else {
+            api.updateGlossaryTerm(authorization(), glossaryTermId, request)
+        }
+    }
+
+    suspend fun deleteGlossaryTerm(glossaryTermId: String) =
+        api.deleteGlossaryTerm(authorization(), glossaryTermId)
+
     suspend fun adminSermon(sermonId: String) = api.adminSermon(authorization(), sermonId)
+
+    suspend fun previewSermon(sermonId: String) = api.previewSermon(authorization(), sermonId)
+
+    suspend fun deleteAdminSermon(sermonId: String) =
+        api.deleteAdminSermon(authorization(), sermonId)
+
+    suspend fun hideAdminSermon(sermonId: String) =
+        api.hideAdminSermon(authorization(), sermonId)
+
+    suspend fun showAdminSermon(sermonId: String) =
+        api.showAdminSermon(authorization(), sermonId)
 
     suspend fun confirmSourceText(sermonId: String, arabicText: String) =
         api.confirmSourceText(
@@ -62,20 +149,6 @@ class KhutbaRepository(private val api: KhutbaApi = ApiFactory.api) {
             sermonId,
             SourceTextReviewRequest(arabicText.trim()),
         )
-
-    suspend fun uploadSource(
-        resolver: ContentResolver,
-        uri: Uri,
-        title: String,
-        authority: String,
-        language: String,
-    ) = api.uploadSource(
-        authorization(),
-        title.textBody(),
-        authority.textBody(),
-        language.textBody(),
-        resolver.documentPart(uri),
-    )
 
     suspend fun uploadSermon(
         resolver: ContentResolver,
@@ -165,9 +238,21 @@ private fun HttpException.serverDetail(): String? {
     }.getOrNull()
 }
 
+private const val SCHEDULED_SERVICE_MESSAGE =
+    "The Khutba app is available every Friday from 10:00 AM to 3:00 PM Copenhagen time. " +
+        "The service is currently offline; please try again during this window."
+
 fun Throwable.userMessage(): String = when (this) {
-    is HttpException -> serverDetail() ?: "Server rejected the request (${code()}): ${message()}"
-    is ConnectException -> "Cannot reach the Khutba API. Start the backend server and try again."
-    is SocketTimeoutException -> "The Khutba API took too long to respond. Please try again."
+    is HttpException -> if (code() in 502..504) {
+        SCHEDULED_SERVICE_MESSAGE
+    } else {
+        serverDetail() ?: "Server rejected the request (${code()}): ${message()}"
+    }
+    is ConnectException,
+    is NoRouteToHostException,
+    is SocketException,
+    is SocketTimeoutException,
+    is UnknownHostException,
+    -> SCHEDULED_SERVICE_MESSAGE
     else -> message ?: "Unexpected error"
 }

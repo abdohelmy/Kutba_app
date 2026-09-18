@@ -15,6 +15,11 @@ from app.core.config import get_settings
 from app.services.ocr import ocr_pdf
 
 ARABIC_RE = re.compile(r"[\u0600-\u06FF]")
+ARABIC_MARKS_RE = re.compile(r"[\u0610-\u061A\u064B-\u065F\u0670\u06D6-\u06ED]")
+KHUTBA_CLOSE_RE = re.compile(
+    r"اقول\s+قولي\s+هذا\s+واستغفر\s+الله(?:\s+العظيم)?"
+    r"(?:\s+لي\s+ولكم(?:\s+ولسائر\s+المسلمين)?)?"
+)
 PDF_MIME_TYPES = {"application/pdf", "application/x-pdf"}
 DOCX_MIME_TYPES = {
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -110,9 +115,7 @@ def _extract_docx_text(content: bytes) -> str:
     try:
         document = Document(BytesIO(content))
         blocks = [
-            paragraph.text.strip()
-            for paragraph in document.paragraphs
-            if paragraph.text.strip()
+            paragraph.text.strip() for paragraph in document.paragraphs if paragraph.text.strip()
         ]
         for table in document.tables:
             for row in table.rows:
@@ -174,34 +177,108 @@ def remove_stored_file(path: str) -> None:
         return
 
 
+def _normalized_arabic_with_offsets(value: str) -> tuple[str, list[int]]:
+    characters: list[str] = []
+    offsets: list[int] = []
+    character_translation = {
+        "أ": "ا",
+        "إ": "ا",
+        "آ": "ا",
+        "ٱ": "ا",
+        "ى": "ي",
+        "ؤ": "و",
+        "ئ": "ي",
+    }
+    for index, character in enumerate(value):
+        if ARABIC_MARKS_RE.fullmatch(character) or character == "ـ":
+            continue
+        characters.append(character_translation.get(character, character))
+        offsets.append(index)
+    return "".join(characters), offsets
+
+
+def _khutba_parts(text: str) -> list[str]:
+    normalized, offsets = _normalized_arabic_with_offsets(text)
+    boundaries = [
+        offsets[match.end() - 1] + 1
+        for match in KHUTBA_CLOSE_RE.finditer(normalized)
+        if match.end() > 0
+    ]
+    if not boundaries:
+        return [text]
+    parts: list[str] = []
+    start = 0
+    for end in boundaries:
+        while end < len(text) and text[end] in " \t،,.;؛!?؟":
+            end += 1
+        part = text[start:end].strip()
+        if part:
+            parts.append(part)
+        start = end
+    remainder = text[start:].strip()
+    if remainder:
+        parts.append(remainder)
+    return parts
+
+
+def _safe_long_pieces(value: str, max_chars: int) -> list[str]:
+    from app.services.canonical_sources import bounded_passage_candidates
+
+    protected = [
+        (passage.start, passage.end)
+        for passage in bounded_passage_candidates(value)
+        if passage.start is not None and passage.end is not None
+    ]
+    pieces: list[str] = []
+    start = 0
+    while len(value) - start > max_chars:
+        target = start + max_chars
+        candidates = [
+            match.end()
+            for match in re.finditer(r"\s+", value[start:target])
+            if not any(
+                protected_start < start + match.end() < protected_end
+                for protected_start, protected_end in protected
+            )
+        ]
+        end = start + candidates[-1] if candidates else target
+        piece = value[start:end].strip()
+        if piece:
+            pieces.append(piece)
+        start = end
+        while start < len(value) and value[start].isspace():
+            start += 1
+    remainder = value[start:].strip()
+    if remainder:
+        pieces.append(remainder)
+    return pieces
+
+
 def split_text(text: str, max_chars: int = 2800) -> list[str]:
-    paragraphs = [re.sub(r"[ \t]+", " ", value).strip() for value in re.split(r"\n\s*\n", text)]
-    paragraphs = [value for value in paragraphs if value]
     segments: list[str] = []
     current = ""
-    for paragraph in paragraphs:
-        if len(paragraph) > max_chars:
-            sentences = [
-                part.strip() for part in re.split(r"(?<=[.!؟؛])\s+", paragraph) if part.strip()
-            ]
-        else:
-            sentences = [paragraph]
-        for sentence in sentences:
-            if len(sentence) > max_chars:
-                pieces = [sentence[i : i + max_chars] for i in range(0, len(sentence), max_chars)]
-            else:
-                pieces = [sentence]
-            for piece in pieces:
-                candidate = f"{current}\n\n{piece}".strip() if current else piece
-                if current and len(candidate) > max_chars:
-                    segments.append(current)
-                    current = piece
-                else:
-                    current = candidate
+    khutba_parts = _khutba_parts(text)
+    for part_index, khutba_part in enumerate(khutba_parts):
+        paragraphs = [
+            re.sub(r"[ \t]+", " ", value).strip() for value in re.split(r"\n\s*\n", khutba_part)
+        ]
+        for paragraph in (value for value in paragraphs if value):
+            sentences = (
+                [item.strip() for item in re.split(r"(?<=[.!؟؛])\s+", paragraph) if item.strip()]
+                if len(paragraph) > max_chars
+                else [paragraph]
+            )
+            for sentence in sentences:
+                for piece in _safe_long_pieces(sentence, max_chars):
+                    candidate = f"{current}\n\n{piece}".strip() if current else piece
+                    if current and len(candidate) > max_chars:
+                        segments.append(current)
+                        current = piece
+                    else:
+                        current = candidate
+        if part_index < len(khutba_parts) - 1 and current:
+            segments.append(current)
+            current = ""
     if current:
         segments.append(current)
     return segments
-
-
-def chunk_reference_text(text: str, max_chars: int = 1800) -> list[str]:
-    return split_text(text, max_chars=max_chars)

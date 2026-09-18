@@ -1,8 +1,14 @@
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field, model_validator
+from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+DEFAULT_GLOSSARY_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "data"
+    / "islamic_khutbah_649_verified_variations_contexts.csv"
+)
 
 
 class Settings(BaseSettings):
@@ -18,7 +24,9 @@ class Settings(BaseSettings):
     secret_key: str = "dev-only-change-me-before-production-123456"
     database_url: str = "sqlite:///./khutba.db"
     storage_dir: Path = Path("./data")
+    glossary_path: Path = DEFAULT_GLOSSARY_PATH
     access_token_minutes: int = 60
+    mosque_registration_password: SecretStr = SecretStr("01082025")
     max_document_bytes: int = 15 * 1024 * 1024
     ocr_enabled: bool = True
     pdftoppm_command: str = "pdftoppm"
@@ -34,6 +42,7 @@ class Settings(BaseSettings):
     quran_api_mode: str = Field(default="legacy", pattern="^(legacy|oauth)$")
     quran_legacy_api_base_url: str = "https://api.quran.com/api/v4"
     quran_translation_id: int = Field(default=20, ge=1)
+    quran_transliteration_id: int = Field(default=57, ge=1)
     quran_foundation_environment: str = Field(
         default="production", pattern="^(prelive|production)$"
     )
@@ -41,10 +50,12 @@ class Settings(BaseSettings):
     quran_foundation_client_secret: str | None = None
     sunnah_api_base_url: str = "https://api.sunnah.com/v1"
     sunnah_api_key: str | None = None
+    sunnah_web_search_fallback_enabled: bool = True
+    sunnah_web_search_concurrency: int = Field(default=3, ge=1, le=8)
 
     translation_provider: str = "openai"
     openai_api_key: str | None = None
-    openai_model: str = "gpt-5.6"
+    openai_model: str = "gpt-5.6-luna"
     verifier_model: str | None = None
     openai_base_url: str | None = None
     reasoning_effort: str = Field(default="high", pattern="^(none|low|medium|high|xhigh|max)$")

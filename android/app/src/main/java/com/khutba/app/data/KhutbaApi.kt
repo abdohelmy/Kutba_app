@@ -3,6 +3,11 @@ package com.khutba.app.data
 import com.khutba.app.BuildConfig
 import com.khutba.app.model.LoginRequest
 import com.khutba.app.model.Mosque
+import com.khutba.app.model.MosqueGlossaryTerm
+import com.khutba.app.model.MosqueGlossaryTermRequest
+import com.khutba.app.model.MosqueProfileUpdateRequest
+import com.khutba.app.model.MosqueRegisterRequest
+import com.khutba.app.model.PasswordChangeRequest
 import com.khutba.app.model.RegisterRequest
 import com.khutba.app.model.SegmentReviewRequest
 import com.khutba.app.model.SermonDetail
@@ -11,7 +16,6 @@ import com.khutba.app.model.SermonSummary
 import com.khutba.app.model.SourceTextReviewRequest
 import com.khutba.app.model.TokenResponse
 import com.khutba.app.model.TranslationQueued
-import com.khutba.app.model.TrustedSource
 import com.khutba.app.model.User
 import kotlinx.serialization.json.Json
 import okhttp3.MultipartBody
@@ -19,6 +23,7 @@ import okhttp3.RequestBody
 import retrofit2.Retrofit
 import retrofit2.converter.kotlinx.serialization.asConverterFactory
 import retrofit2.http.Body
+import retrofit2.http.DELETE
 import retrofit2.http.GET
 import retrofit2.http.Header
 import retrofit2.http.Multipart
@@ -37,40 +42,67 @@ interface KhutbaApi {
     @POST("auth/register")
     suspend fun register(@Body request: RegisterRequest): User
 
+    @POST("auth/register-mosque")
+    suspend fun registerMosque(@Body request: MosqueRegisterRequest): User
+
     @GET("auth/me")
     suspend fun me(@Header("Authorization") authorization: String): User
 
     @GET("reader/mosques")
-    suspend fun mosques(@Header("Authorization") authorization: String): List<Mosque>
+    suspend fun mosques(): List<Mosque>
 
     @GET("reader/mosques/{mosqueId}/sermons")
     suspend fun publishedSermons(
-        @Header("Authorization") authorization: String,
         @Path("mosqueId") mosqueId: String,
         @Query("language") language: String? = null,
     ): List<SermonSummary>
 
     @GET("reader/sermons/{sermonId}")
     suspend fun publishedSermon(
-        @Header("Authorization") authorization: String,
         @Path("sermonId") sermonId: String,
     ): SermonDetail
 
-    @GET("admin/sources")
-    suspend fun sources(@Header("Authorization") authorization: String): List<TrustedSource>
-
-    @Multipart
-    @POST("admin/sources")
-    suspend fun uploadSource(
-        @Header("Authorization") authorization: String,
-        @Part("title") title: RequestBody,
-        @Part("authority") authority: RequestBody,
-        @Part("language") language: RequestBody,
-        @Part file: MultipartBody.Part,
-    ): TrustedSource
-
     @GET("admin/sermons")
     suspend fun adminSermons(@Header("Authorization") authorization: String): List<SermonSummary>
+
+    @GET("admin/profile")
+    suspend fun adminProfile(@Header("Authorization") authorization: String): Mosque
+
+    @PATCH("admin/profile")
+    suspend fun updateAdminProfile(
+        @Header("Authorization") authorization: String,
+        @Body request: MosqueProfileUpdateRequest,
+    ): Mosque
+
+    @PUT("admin/password")
+    suspend fun changeAdminPassword(
+        @Header("Authorization") authorization: String,
+        @Body request: PasswordChangeRequest,
+    )
+
+    @GET("admin/glossary")
+    suspend fun adminGlossary(
+        @Header("Authorization") authorization: String,
+    ): List<MosqueGlossaryTerm>
+
+    @POST("admin/glossary")
+    suspend fun createGlossaryTerm(
+        @Header("Authorization") authorization: String,
+        @Body request: MosqueGlossaryTermRequest,
+    ): MosqueGlossaryTerm
+
+    @PUT("admin/glossary/{glossaryTermId}")
+    suspend fun updateGlossaryTerm(
+        @Header("Authorization") authorization: String,
+        @Path("glossaryTermId") glossaryTermId: String,
+        @Body request: MosqueGlossaryTermRequest,
+    ): MosqueGlossaryTerm
+
+    @DELETE("admin/glossary/{glossaryTermId}")
+    suspend fun deleteGlossaryTerm(
+        @Header("Authorization") authorization: String,
+        @Path("glossaryTermId") glossaryTermId: String,
+    )
 
     @Multipart
     @POST("admin/sermons")
@@ -87,6 +119,30 @@ interface KhutbaApi {
         @Header("Authorization") authorization: String,
         @Path("sermonId") sermonId: String,
     ): SermonDetail
+
+    @GET("admin/sermons/{sermonId}/preview")
+    suspend fun previewSermon(
+        @Header("Authorization") authorization: String,
+        @Path("sermonId") sermonId: String,
+    ): SermonDetail
+
+    @DELETE("admin/sermons/{sermonId}")
+    suspend fun deleteAdminSermon(
+        @Header("Authorization") authorization: String,
+        @Path("sermonId") sermonId: String,
+    )
+
+    @POST("admin/sermons/{sermonId}/hide")
+    suspend fun hideAdminSermon(
+        @Header("Authorization") authorization: String,
+        @Path("sermonId") sermonId: String,
+    ): SermonSummary
+
+    @POST("admin/sermons/{sermonId}/show")
+    suspend fun showAdminSermon(
+        @Header("Authorization") authorization: String,
+        @Path("sermonId") sermonId: String,
+    ): SermonSummary
 
     @PUT("admin/sermons/{sermonId}/source-text")
     suspend fun confirmSourceText(

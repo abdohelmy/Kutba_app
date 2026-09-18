@@ -7,6 +7,7 @@ from sqlalchemy import (
     Date,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
@@ -29,6 +30,7 @@ class SermonStatus(StrEnum):
     TRANSLATING = "TRANSLATING"
     REVIEW_REQUIRED = "REVIEW_REQUIRED"
     PUBLISHED = "PUBLISHED"
+    HIDDEN = "HIDDEN"
     FAILED = "FAILED"
 
 
@@ -48,10 +50,31 @@ class Mosque(Base, IdMixin, TimestampMixin):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
 
+class MosqueGlossaryTerm(Base, IdMixin, TimestampMixin):
+    __tablename__ = "mosque_glossary_terms"
+    __table_args__ = (
+        UniqueConstraint("mosque_id", "normalized_term", name="uq_mosque_glossary_term"),
+    )
+
+    mosque_id: Mapped[str] = mapped_column(ForeignKey("mosques.id"), index=True)
+    arabic_term: Mapped[str] = mapped_column(String(250))
+    normalized_term: Mapped[str] = mapped_column(String(250))
+    meaning: Mapped[str] = mapped_column(Text)
+    literal_translation: Mapped[str] = mapped_column(String(500))
+    arabic_variations: Mapped[str] = mapped_column(Text, default="")
+    alternative_context_meanings: Mapped[str] = mapped_column(Text, default="")
+
+
 class User(Base, IdMixin, TimestampMixin):
     __tablename__ = "users"
+    __table_args__ = (
+        Index("ix_users_username", "email"),
+        Index("uq_users_username_role", "email", "role", unique=True),
+    )
 
-    email: Mapped[str] = mapped_column(String(320), unique=True, index=True)
+    # The physical column keeps its legacy name so existing development databases can be migrated
+    # without rebuilding foreign-key relationships. The public API exposes only `username`.
+    username: Mapped[str] = mapped_column("email", String(64))
     display_name: Mapped[str] = mapped_column(String(120))
     password_hash: Mapped[str] = mapped_column(String(255))
     role: Mapped[UserRole] = mapped_column(String(32), default=UserRole.READER)
@@ -61,37 +84,12 @@ class User(Base, IdMixin, TimestampMixin):
     mosque: Mapped[Mosque | None] = relationship()
 
 
-class TrustedSource(Base, IdMixin, TimestampMixin):
-    __tablename__ = "trusted_sources"
-
-    mosque_id: Mapped[str] = mapped_column(ForeignKey("mosques.id"), index=True)
-    title: Mapped[str] = mapped_column(String(250))
-    authority: Mapped[str] = mapped_column(String(250))
-    language: Mapped[str] = mapped_column(String(16))
-    file_path: Mapped[str] = mapped_column(String(500))
-    sha256: Mapped[str] = mapped_column(String(64))
-
-    chunks: Mapped[list["SourceChunk"]] = relationship(
-        back_populates="source", cascade="all, delete-orphan"
-    )
-
-
-class SourceChunk(Base, IdMixin):
-    __tablename__ = "source_chunks"
-    __table_args__ = (UniqueConstraint("source_id", "ordinal"),)
-
-    source_id: Mapped[str] = mapped_column(ForeignKey("trusted_sources.id"), index=True)
-    ordinal: Mapped[int] = mapped_column(Integer)
-    text: Mapped[str] = mapped_column(Text)
-
-    source: Mapped[TrustedSource] = relationship(back_populates="chunks")
-
-
 class Sermon(Base, IdMixin, TimestampMixin):
     __tablename__ = "sermons"
 
     mosque_id: Mapped[str] = mapped_column(ForeignKey("mosques.id"), index=True)
     title: Mapped[str] = mapped_column(String(250))
+    title_is_inferred: Mapped[bool] = mapped_column(Boolean, default=False)
     khutba_date: Mapped[date] = mapped_column(Date, index=True)
     target_language: Mapped[str] = mapped_column(String(16))
     # Keep the original database column names so existing development databases remain readable.

@@ -59,8 +59,7 @@ def ocr_pdf(content: bytes, page_count: int) -> str:
     missing = [language for language in requested_languages if language not in languages]
     if missing:
         raise OcrUnavailableError(
-            "Scanned PDF detected, but Tesseract language data is missing: "
-            + ", ".join(missing)
+            "Scanned PDF detected, but Tesseract language data is missing: " + ", ".join(missing)
         )
 
     with TemporaryDirectory(prefix="khutba-ocr-") as temporary_directory:

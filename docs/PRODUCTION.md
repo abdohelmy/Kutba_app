@@ -24,14 +24,14 @@ Do not publish real sermons from the starter configuration until these controls 
   structured logs with no sermon/API-key leakage.
 - Store secrets in a secret manager; rotate JWT and provider keys. Use asymmetric access tokens or an
   external identity provider for a multi-instance deployment.
-- Add admin invitation, password reset, email verification, MFA, mosque-admin removal, and session
+- Add admin invitation, password reset/recovery, MFA, mosque-admin removal, and session
   revocation. Public self-registration must never create an admin.
-- Replace in-memory Android tokens with a reviewed Keystore-backed session design if persistent login
-  is required.
+- Replace in-memory mobile tokens with a reviewed Keychain/Keystore-backed session design if
+  persistent login is required.
 - Add backups, restore drills, privacy retention rules, account deletion, incident response, and
   monitoring for stuck or failed translation jobs.
-- Run SAST, dependency scanning, API abuse tests, Android lint/tests, and an independent penetration
-  test before launch.
+- Run SAST, dependency scanning, API abuse tests, Android lint/tests, iOS build/tests, and an
+  independent penetration test before launch.
 
 ## Documents and retrieval
 
