@@ -1,214 +1,65 @@
 # Khutba
 
-Khutba is an iOS + Android + FastAPI starter for translating Arabic Friday-sermon PDF or DOCX documents into a
-mosque-approved target language. AI output is never public by default: every segment must be
-reviewed and explicitly approved by a mosque administrator before readers can see it.
+Khutba helps people follow the Friday sermon when they do not speak Arabic. Mosques upload their sermon, review its translation, and publish it for their congregation. Readers choose their mosque and open the khutba without creating an account.
 
-## What is implemented
+The project includes a web app, Android and iOS apps, and a shared Python API. English and Danish translations are supported. The web app also lets a mosque use a microphone to help readers follow the imam's place in the sermon as he speaks.
 
-- A two-choice start screen: individual readers enter mosque selection without an account, while
-  mosque administrators continue through a protected sign-in screen.
-- Public mosque selection, date-sectioned published-sermon list with a prominent current-week
-  group, and English-only reading view with source popups for canonical Arabic evidence.
-- Mosque-admin login, Arabic khutba PDF/DOCX upload, translation status,
-  segment review/edit/approval, publication, reversible hide/show, and confirmed removal. Titles
-  are optional and inferred from the sermon when omitted. New uploads default to the upcoming
-  Friday in both mobile clients.
-- A bundled 1,000-entry Arabic khutba glossary highlights the first explicit difficult-term marker
-  in each sermon. Tapping the colored English term opens its Arabic wording, contextual meaning,
-  and literal wording from the supplied CSV.
-- Tenant scoping: a mosque administrator cannot read or change another mosque's drafts.
-- Provider-neutral translation interface:
-  - OpenAI Responses API with structured Pydantic output.
-  - OpenAI-compatible Chat Completions endpoint for vLLM, Ollama, or another local gateway.
-  - Deterministic mock provider for tests.
-- Canonical citations and verifier warnings are stored on each translated segment for reviewer audit.
-- Reader-facing Quran citations use a Surah name and verse key such as `Al-Baqarah 2:152`; internal
-  source IDs are confined to structured API data and are stripped if a model puts them in prose.
-- Qur'anic quotations are matched against Quran.com's Arabic verse catalog and use the configured
-  Quran.com English translation and Latin transliteration. Explicit collection/number hadith
-  references use Sunnah.com's
-  official API. If the hadith API cannot resolve a cue-marked passage, the OpenAI provider can run
-  a hosted web search restricted to Sunnah.com. Accepted results must pass URL and Arabic-wording
-  checks. Canonical sources produce direct source links in the mosque review screen.
-- A separate verifier call can use a different configured model.
-- Difficult or ambiguous religious terms retain the exact Arabic immediately after the English
-  wording, such as `God-consciousness (التقوى)`. Citation popups place a checked Latin
-  transliteration directly below the authenticated Arabic source text.
-- Fail-closed publication: generated content remains unavailable to readers until all segments have
-  `HUMAN_APPROVED` status.
-- Files never cross the model-provider boundary. The API validates each PDF/DOCX, extracts its text,
-  and sends only bounded text segments plus detected canonical excerpts to the configured provider.
-- Scanned khutba PDFs use bounded local Arabic OCR. Every extracted Arabic khutba enters
-  `SOURCE_REVIEW_REQUIRED`; a mosque reviewer must correct and confirm it before translation starts.
+[Open the web app](https://khutba-reader.abdohelmy1995.chatgpt.site/)
 
-## Important accuracy boundary
+## Reading a khutba
 
-No generative model or software pipeline can honestly guarantee a translation with zero mistakes.
-This project treats translation as high-risk religious content and reduces risk through canonical
-Qur'an/hadith retrieval, a second verification pass, visible evidence, and mandatory human
-approval. The mosque remains responsible for appointing a qualified Arabic/target-language reviewer
-and for approving the final wording. Canonical Qur'an and hadith quotations are retrieved from
-Quran.com and Sunnah.com; ordinary sermon prose is translated directly from the reviewed Arabic.
+Sermons are arranged by date so readers can find this week's khutba or return to an earlier one. The reader shows the translated text, with references and explanations available when needed.
 
-## Repository
+- **Qur'an and hadith references:** A small citation beside a quotation opens its Arabic text, transliteration, and a link to the source.
+- **Glossary explanations:** Some religious terms need more than a single translated word. Their Arabic wording appears beside the translation and can be tapped to see the phrase used in the text, its transliteration, and an explanation.
+- **PDF downloads:** Readers can save the translated khutba as a PDF. Numbered references point to sources listed at the end.
+- **Live following:** When a mosque starts a live session, readers can follow the highlighted passage while listening to the imam.
 
-```text
-backend/   FastAPI, SQLAlchemy, PDF/DOCX text extraction, retrieval, providers, tests
-android/   Kotlin, Jetpack Compose, Retrofit Android client
-ios/       Swift, SwiftUI, URLSession iPhone and iPad client
-docs/      architecture, workflow, and production-readiness notes
-```
+## Preparing and publishing a sermon
 
-## Run the API
+A mosque administrator uploads an Arabic PDF or Word document. The API extracts the text before translation; scanned PDFs can use OCR when it is available. The administrator checks the extracted Arabic first, since missing words or poor extraction can affect everything that follows.
 
-Python 3.11 or newer is required.
+The app then prepares an English draft, looks for Qur'an and hadith quotations, and adds relevant glossary explanations. Administrators can review and edit the translation alongside the Arabic, check its references, and approve it for publication. Drafts stay private until the required review is complete.
 
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -e 'backend[dev]'
-cp .env.example backend/.env
-cd backend
-python -m app.seed \
-  --mosque "Central Mosque" \
-  --city "Copenhagen" \
-  --username mosque-admin \
-  --name "Qualified Reviewer" \
-  --password "replace-this-password"
-uvicorn app.main:app --reload
-```
+Danish is prepared from the approved, published English version. It keeps the connection to the original Arabic and the same source references, but its wording and glossary explanations need their own review. A reference supports the source quotation; it does not independently verify the Danish translation.
 
-Set a random `KHUTBA_SECRET_KEY` and `KHUTBA_OPENAI_API_KEY` in `backend/.env` before making a real
-translation request. The OpenAI key belongs only on the API server; never put it in either mobile
-client's build settings, resources, or local storage.
+Titles can be suggested from the sermon and edited later. Uploads default to the upcoming Friday. Mosque administrators can also hide or remove sermons and update their mosque's name, city, and account settings.
 
-The interactive API documentation is at `http://localhost:8000/docs`.
+## Translation, sources, and terminology
 
-### Configure Qur'an and hadith sources
+Ordinary sermon text is translated from the reviewed Arabic. Qur'an quotations are checked against Quran.com's Arabic text and linked to the selected published English translation. Hadith passages are looked up through Sunnah.com, with a search fallback for quotations that do not include a collection or hadith number.
 
-For local testing, the default `KHUTBA_QURAN_API_MODE=legacy` uses Quran.com's current public content
-endpoint and resource `20` (Saheeh International). For production, request Quran Foundation API
-access at <https://api-docs.quran.com/request-access/>, then configure the server-only credentials:
+Quotation marks and phrases such as قال الله and قال رسول الله help identify passages worth checking. The Arabic wording is compared with the retrieved source before a match is accepted. Reviewers can inspect the reference and any warnings alongside the translation.
 
-```dotenv
-KHUTBA_QURAN_API_MODE=oauth
-KHUTBA_QURAN_FOUNDATION_ENVIRONMENT=production
-KHUTBA_QURAN_FOUNDATION_CLIENT_ID=your-client-id
-KHUTBA_QURAN_FOUNDATION_CLIENT_SECRET=your-client-secret
-KHUTBA_QURAN_TRANSLATION_ID=20
-KHUTBA_QURAN_TRANSLITERATION_ID=57
-```
+The glossary handles Arabic spelling variations and vowel marks, with explanations intended for the context in which a term appears. Mosques can suggest entries and supply missing definitions after translation. An owner reviews these contributions before they become available for use.
 
-For exact collection-and-number lookups, Sunnah.com requires an API key. Request one through the
-official developer page at <https://sunnah.com/developers>, then set it only on the Python server:
+Human review is central to the app. Translation models can misunderstand a passage, and a retrieved hadith still needs to be checked in its context, including its grading where available. The mosque is responsible for approving the wording its readers receive.
 
-```dotenv
-KHUTBA_SUNNAH_API_KEY=your-sunnah-api-key
-KHUTBA_SUNNAH_WEB_SEARCH_FALLBACK_ENABLED=true
-```
+## Following the imam live
 
-The app detects full Arabic Qur'an verses, explicit references such as `(2:255)`, Qur'an quotation
-marks such as `﴿...﴾`, cue phrases such as `بسم الله الرحمن الرحيم` and `قال الله`, and partially
-quoted verses distinguished by tashkīl. It compares the Arabic words with Quran.com's verse catalog;
-formatting alone is never enough to classify ordinary prose as Qur'an. The conventional sermon-opening
-basmalah is linked to 1:1 unless the text explicitly cites 27:30.
+A mosque administrator can enable the microphone in the web app. Short audio chunks pass through the API to a speech worker running on a separate computer with an NVIDIA GPU. The worker currently uses Cohere's Arabic transcription model, with Silero voice activity detection to filter chunks with too little speech.
 
-Hadith cues include vocalized and unvocalized forms of `في الحديث` and `قال رسول الله`, as well as
-quotation marks and tashkīl. An exact collection and number such as
-`صحيح البخاري، حديث رقم 1` uses the official API first. If the API is unavailable, lacks credentials,
-or the cue has no number, the OpenAI provider uses its web-search tool with an allow-list containing
-only `sunnah.com`. A result is accepted only when its HTTPS Sunnah.com URL has the expected
-collection/number form and its Arabic text has a contiguous match with the detected sermon passage.
-Search failures, ambiguous results, unavailable APIs, and altered canonical wording are shown to the
-reviewer. Generated output cannot be published until a human approves every segment. The hosted
-fallback is unavailable when using a local OpenAI-compatible model, so those cases require manual
-hadith verification unless a Sunnah API key is configured.
+The API compares the transcript with the prepared Arabic khutba and maps the estimated position to the reader's translation. It allows for imperfect transcription, repeated words, and small changes in wording. When the imam speaks outside the written sermon, the tracker waits for enough evidence before moving to a different passage.
 
-PDF and DOCX extraction preserves text, paragraph breaks, quotation characters, and tashkīl when the
-source parser/OCR returns them. Font, colour, and bold styling are not used as trust signals because
-PDF extraction and OCR do not preserve them reliably.
+In the web reader, green marks the confirmed position. Pale yellow previews the next passage when the timer estimates that the current one has finished. It becomes yellow when the ending-word check passes, and stays there until the green highlight reaches or passes it. These previews help readers anticipate a transition; they do not confirm the imam's position themselves.
 
-Sunnah.com supplies the referenced English wording and any grade returned by its API. A successful
-lookup does not mean every narration in every collection is automatically *sahih*; the qualified
-reviewer must still inspect the collection, number, and displayed grading.
+Live tracking is approximate and depends on microphone quality, transcription, and processing delay. The speech worker needs to remain connected during a live session. It also supports local diagnostic logs and experimental semantic comparisons for assessing matching quality.
 
-### Enable scanned-PDF OCR
+## Managing the service
 
-The API uses local Poppler and Tesseract commands. The official Tesseract Arabic language code is
-`ara`, which is the default because khutbas are expected to be Arabic. Set
-`KHUTBA_OCR_LANGUAGES=ara+eng` only for genuinely bilingual scanned pages.
+The web app includes an owner dashboard for approving mosque registrations and glossary contributions, managing accounts, reviewing sermons, and handling password resets. Mosque administrators manage their own mosque's content; readers only see published sermons from available mosques.
 
-```bash
-# macOS with Conda (keeps OCR tools inside this project)
-conda create -y -p .local/ocr -c conda-forge tesseract poppler
-export KHUTBA_TESSERACT_COMMAND="$PWD/.local/ocr/bin/tesseract"
-export KHUTBA_PDFTOPPM_COMMAND="$PWD/.local/ocr/bin/pdftoppm"
+The API handles authentication, document extraction, translation, source retrieval, glossary data, publication, and live matching. Translation providers sit behind a common interface, with support for OpenAI and compatible model servers. Available features depend on the provider, particularly source-search tools.
 
-# Ubuntu/Debian alternative
-sudo apt-get install tesseract-ocr tesseract-ocr-ara poppler-utils
-```
+## Inside the repository
 
-Confirm the installation before starting the API:
+| Folder | Contents |
+| --- | --- |
+| `backend/` | Python API, translation and review workflow, source retrieval, glossary, and live matching |
+| `web/` | Web reader, mosque administration, owner dashboard, and microphone capture |
+| `android/` | Native Android app built with Kotlin and Jetpack Compose |
+| `ios/` | Native iPhone and iPad app built with SwiftUI |
+| `live-worker/` | GPU speech worker, voice activity detection, and transcription diagnostics |
+| `docs/` | Architecture notes, administration details, release notes, and privacy policy |
 
-```bash
-$KHUTBA_TESSERACT_COMMAND --list-langs
-# Must include: ara and eng
-```
-
-OCR is limited by page count, file size, render DPI, and command timeouts. The generated Arabic is
-never trusted automatically and cannot proceed to English translation until the mosque confirms it.
-
-## Use a local/open model
-
-Point the same API at an OpenAI-compatible server:
-
-```dotenv
-KHUTBA_TRANSLATION_PROVIDER=openai_compatible
-KHUTBA_OPENAI_BASE_URL=http://localhost:11434/v1
-KHUTBA_OPENAI_API_KEY=local
-KHUTBA_OPENAI_MODEL=your-translation-model
-KHUTBA_VERIFIER_MODEL=your-independent-verifier-model
-```
-
-The selected server/model must support JSON-object responses. Before using any open model for
-publication, run mosque-approved Arabic test sermons through it and measure omissions, additions,
-Qur'an/hadith wording, names, numbers, polarity, and Islamic legal terminology.
-
-## Run tests
-
-```bash
-cd backend
-../.venv/bin/ruff check .
-../.venv/bin/pytest -q
-```
-
-## Open Android
-
-Open the `android/` directory in a current Android Studio installation with Android SDK 37. Start the
-API on port 8000, then reverse that port before launching the debug app. Run the reverse command
-again whenever the emulator or connected device is restarted. The debug build calls
-`http://127.0.0.1:8000/api/v1/` through this tunnel. Configure the release `API_BASE_URL` in
-`android/app/build.gradle.kts` to an HTTPS production domain.
-
-```bash
-adb reverse tcp:8000 tcp:8000
-cd android
-./gradlew assembleDebug
-```
-
-The scaffold follows current official Android guidance: AGP 9.2, Gradle 9.4.1, compile SDK 37, and the
-stable Compose BOM. OpenAI integration uses the Responses API and structured outputs; the model is
-configuration, not an Android dependency.
-
-See [Architecture](docs/ARCHITECTURE.md) and [Production checklist](docs/PRODUCTION.md).
-
-## Open iOS
-
-Open `ios/Khutba.xcodeproj` in Xcode 16 or newer and run the `Khutba` scheme on an iOS 17+
-simulator or device. The iOS app uses the same HTTPS API as Android and includes both the public
-reader experience and the mosque-administrator upload, source-review, translation, approval,
-publication, settings, and glossary workflows.
-
-Select **Product → Test** to run the `KhutbaTests` target. See `ios/README.md` for configuration
-details.
+The clients use the same API, although features can differ between platforms and installed versions. Owner controls and microphone capture are currently available through the web app.
