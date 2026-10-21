@@ -1,6 +1,6 @@
 # Khutba Privacy Policy
 
-Last updated: 18 September 2026
+Last updated: 6 October 2026
 
 > Draft: replace the bracketed details and confirm the retention and legal arrangements before publishing.
 
@@ -14,7 +14,28 @@ Khutba lets individuals read translated Friday sermons and lets mosque administr
 
 **Technical information:** Our server and hosting provider may record IP addresses, request times, requested addresses, and error information when you connect. Requests can identify the mosque or sermon being accessed. Because Khutba concerns religious content, this information may reveal religious interests.
 
-The app does not request access to your contacts, microphone, camera, or precise device location. It does not include advertising or third-party analytics SDKs.
+The ordinary reader does not request microphone access. Mosque administrators may
+optionally grant microphone access in the web app to start live imam tracking.
+The app does not request access to your contacts, camera, or precise device
+location. It does not include advertising or third-party analytics SDKs.
+
+**Optional live tracking:** While an administrator's microphone is enabled,
+short audio chunks are sent through the API to the operator's connected desktop
+for Arabic speech recognition. Short current/next Arabic sentence excerpts from
+the khutba are also sent to that authenticated worker as recognition hints.
+The transcript is temporarily matched against
+the prepared khutba to share an approximate reading position. Audio is buffered
+temporarily, not saved as a permanent recording or in the app database. Queued
+chunks expire within 25 seconds and are cleared on pause or stop. The supplied
+worker does not write audio to files. Local transcript logging is enabled by
+default for troubleshooting and can be disabled with `--no-debug-log`.
+The log is stored on the operator's desktop. It contains speech text and diagnostic information, not audio
+or access tokens, and remains there until the operator deletes it. Readers receive translated
+highlight positions, not the audio or transcript. Administrators can pause or
+stop capture at any time and should obtain the mosque/imam's permission first.
+Preparing Arabic-to-translation passage mappings uses the configured translation
+provider; with OpenAI configured, approved text may be sent to OpenAI for that
+preparation. Live speech transcription itself runs on the operator's desktop.
 
 ## How we use information
 

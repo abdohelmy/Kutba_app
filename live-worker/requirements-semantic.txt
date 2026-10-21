@@ -1,0 +1,2 @@
+# CPU shadow evaluation, enabled by default; use the existing worker environment.
+sentence-transformers>=5,<6

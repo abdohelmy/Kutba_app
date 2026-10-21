@@ -26,7 +26,12 @@ class Settings(BaseSettings):
     storage_dir: Path = Path("./data")
     glossary_path: Path = DEFAULT_GLOSSARY_PATH
     access_token_minutes: int = 60
-    mosque_registration_password: SecretStr = SecretStr("01082025")
+    public_web_url: str = "https://khutba-reader.abdohelmy1995.chatgpt.site"
+    smtp_host: str | None = None
+    smtp_port: int = 587
+    smtp_username: str | None = None
+    smtp_password: SecretStr = SecretStr("")
+    smtp_from: str | None = None
     max_document_bytes: int = 15 * 1024 * 1024
     ocr_enabled: bool = True
     pdftoppm_command: str = "pdftoppm"
@@ -55,7 +60,7 @@ class Settings(BaseSettings):
 
     translation_provider: str = "openai"
     openai_api_key: str | None = None
-    openai_model: str = "gpt-5.6-luna"
+    openai_model: str = "gpt-6-luna"
     verifier_model: str | None = None
     openai_base_url: str | None = None
     reasoning_effort: str = Field(default="high", pattern="^(none|low|medium|high|xhigh|max)$")

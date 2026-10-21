@@ -36,6 +36,8 @@ class SegmentResponse(BaseModel):
     id: str
     ordinal: int
     arabic_text: str
+    english_text: str | None = None
+    localized_glossary: list[dict] = Field(default_factory=list)
     translated_text: str | None
     verification_status: VerificationStatus
     issues: list[str]
@@ -51,6 +53,7 @@ class SermonSummaryResponse(BaseModel):
     title: str
     khutba_date: date
     target_language: str
+    english_sermon_id: str | None = None
     status: SermonStatus
     provider_name: str | None
     model_name: str | None
@@ -69,6 +72,11 @@ class GlossaryTermResponse(BaseModel):
     meaning: str
     literal_translation: str
     display_term: str
+    english_phrase: str = ""
+    localized_phrase: str = ""
+    popup_phrase: str = ""
+    popup_language: str = ""
+    transliteration: str = ""
     alternative_context_meanings: str = ""
     translation_start: int | None = None
     translation_end: int | None = None
@@ -89,6 +97,7 @@ class MosqueGlossaryTermResponse(BaseModel):
     literal_translation: str
     arabic_variations: str = ""
     alternative_context_meanings: str = ""
+    approval_status: str = "APPROVED"
 
     model_config = {"from_attributes": True}
 
@@ -107,14 +116,25 @@ class ReaderSermonDetailResponse(SermonSummaryResponse):
     segments: list[ReaderSegmentResponse]
 
 
+class LocalizedDefinitionReview(BaseModel):
+    arabic_term: str = Field(min_length=1, max_length=250)
+    localized_phrase: str = Field(min_length=1, max_length=500)
+    meaning: str = Field(min_length=1, max_length=4000)
+
+
 class SegmentReviewRequest(BaseModel):
     translated_text: str | None = Field(default=None, min_length=1)
     approved: bool
     reviewer_note: str | None = Field(default=None, max_length=2000)
+    localized_definitions: list[LocalizedDefinitionReview] | None = None
 
 
 class SourceTextReviewRequest(BaseModel):
     arabic_text: str = Field(min_length=40, max_length=500_000)
+
+
+class SermonTitleRequest(BaseModel):
+    title: str = Field(min_length=1, max_length=250)
 
 
 class PublishResponse(BaseModel):

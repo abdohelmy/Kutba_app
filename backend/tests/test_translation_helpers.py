@@ -105,6 +105,22 @@ def test_partial_canonical_wording_produces_exact_citation_offsets():
     assert _canonical_wording_issues("A paraphrase only.", "en", [source])
 
 
+def test_citation_prefers_complete_later_verse_over_earlier_shared_words():
+    source = RetrievedSource(
+        chunk_id="canonical:quran:41:30", source_id="quran.com:41:30",
+        title="Fussilat 41:30", authority="Quran.com", score=10000,
+        text='Indeed those who have said Our Lord is Allah then remained steadfast angels descend',
+        source_kind="quran", minimum_verbatim_words=4,
+    )
+    translated = (
+        "Indeed those who have said Our Lord is Allah will not grieve.\n\n"
+        + source.text
+    )
+    citation = _citation_payloads(source, translated, None)[0]
+    assert citation["translation_start"] == translated.index(source.text)
+    assert citation["excerpt"] == source.text
+
+
 def test_reader_hides_quran_citation_already_contained_in_hadith_source():
     citations = [
         {

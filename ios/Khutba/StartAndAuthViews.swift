@@ -18,7 +18,7 @@ struct StartView: View {
                     Text("Khutba")
                         .font(.system(size: 40, weight: .bold, design: .rounded))
                         .foregroundStyle(.white)
-                    Text("Faithful translations. Reviewed by your mosque.")
+                    Text("Your mosque’s khutba, in English.")
                         .font(.title3)
                         .multilineTextAlignment(.center)
                         .foregroundStyle(.white.opacity(0.84))
@@ -26,26 +26,23 @@ struct StartView: View {
                 .padding(.top, 48)
 
                 VStack(alignment: .leading, spacing: 15) {
-                    Text("How would you like to continue?")
-                        .font(.title2.bold())
-                    Text("Readers can enter immediately. Mosque teams sign in to manage khutbas.")
-                        .foregroundStyle(.secondary)
                     RoleButton(
-                        title: "Individual",
-                        description: "Choose a mosque and read reviewed khutbas",
+                        title: "Read a khutba",
+                        description: "Choose your mosque. No account needed.",
                         systemImage: "person.fill",
                         action: model.continueAsIndividual
                     )
                     RoleButton(
-                        title: "Mosque",
-                        description: "Upload, review, publish, and remove khutbas",
+                        title: "Mosque sign in",
+                        description: "For mosque admins",
                         systemImage: "building.columns.fill",
+                        primary: false,
                         action: model.openMosqueLogin
                     )
                 }
                 .padding(22)
-                .background(.background, in: RoundedRectangle(cornerRadius: 30, style: .continuous))
-                .shadow(color: .black.opacity(0.13), radius: 18, y: 8)
+                .background(.background, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+                .shadow(color: .black.opacity(0.07), radius: 8, y: 3)
             }
             .padding(.horizontal, 22)
             .padding(.bottom, 30)
@@ -65,6 +62,7 @@ private struct RoleButton: View {
     let title: String
     let description: String
     let systemImage: String
+    var primary = true
     let action: () -> Void
 
     var body: some View {
@@ -89,10 +87,10 @@ private struct RoleButton: View {
                     .foregroundStyle(KhutbaTheme.green)
             }
             .padding(17)
-            .background(KhutbaTheme.mint.opacity(0.5), in: RoundedRectangle(cornerRadius: 18))
+            .background(KhutbaTheme.mint.opacity(primary ? 0.5 : 0.1), in: RoundedRectangle(cornerRadius: 18))
             .overlay {
                 RoundedRectangle(cornerRadius: 18)
-                    .stroke(KhutbaTheme.green, lineWidth: 1.5)
+                    .stroke(KhutbaTheme.green.opacity(primary ? 0.4 : 0.2), lineWidth: 1)
             }
         }
         .buttonStyle(.plain)
@@ -154,7 +152,7 @@ struct MosqueRegistrationView: View {
     @State private var adminName = ""
     @State private var username = ""
     @State private var password = ""
-    @State private var permissionPassword = ""
+    @State private var contactEmail = ""
 
     private var formIsValid: Bool {
         mosqueName.trimmingCharacters(in: .whitespacesAndNewlines).count >= 2 &&
@@ -162,14 +160,14 @@ struct MosqueRegistrationView: View {
         country.range(of: #"^[A-Za-z]{2}$"#, options: .regularExpression) != nil &&
         adminName.trimmingCharacters(in: .whitespacesAndNewlines).count >= 2 &&
         username.range(of: #"^[A-Za-z0-9._-]{3,64}$"#, options: .regularExpression) != nil &&
-        password.count >= 6 && !permissionPassword.isEmpty
+        password.count >= 6 && contactEmail.range(of: #"^[^\s@]+@[^\s@]+\.[^\s@]+$"#, options: .regularExpression) != nil
     }
 
     var body: some View {
         NavigationStack {
             Form {
                 Section {
-                    Text("The permission password is required before the profile can be created.")
+                    Text("The app owner will review your request before you can sign in.")
                         .foregroundStyle(.secondary)
                 } header: {
                     Text("Set up your mosque workspace")
@@ -196,7 +194,10 @@ struct MosqueRegistrationView: View {
                     Text("Use at least 6 characters.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                    SecureField("Permission password", text: $permissionPassword)
+                    TextField("Contact email", text: $contactEmail)
+                        .keyboardType(.emailAddress)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
                 }
                 Section {
                     Button("Create mosque profile") {
@@ -207,7 +208,7 @@ struct MosqueRegistrationView: View {
                             adminName: adminName,
                             username: username,
                             password: password,
-                            permissionPassword: permissionPassword
+                            contactEmail: contactEmail
                         )
                     }
                     .frame(maxWidth: .infinity)

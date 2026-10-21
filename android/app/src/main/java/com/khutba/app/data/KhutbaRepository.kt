@@ -1,5 +1,7 @@
 package com.khutba.app.data
 
+import com.khutba.app.model.GlossaryContribution
+
 import android.content.ContentResolver
 import android.net.Uri
 import android.provider.OpenableColumns
@@ -31,6 +33,9 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import retrofit2.HttpException
 
 class KhutbaRepository(private val api: KhutbaApi = ApiFactory.api) {
+    suspend fun sentenceAlignment(sermonId: String, segmentId: String, text: String) =
+        api.sentenceAlignment(authorization(), sermonId, segmentId, mapOf("translated_text" to text))
+
     private var token: String? = null
 
     private fun authorization(): String =
@@ -53,9 +58,9 @@ class KhutbaRepository(private val api: KhutbaApi = ApiFactory.api) {
         adminDisplayName: String,
         username: String,
         password: String,
-        permissionPassword: String,
+        contactEmail: String,
     ): User {
-        api.registerMosque(
+        return api.registerMosque(
             MosqueRegisterRequest(
                 mosqueName = mosqueName.trim(),
                 city = city.trim(),
@@ -63,10 +68,9 @@ class KhutbaRepository(private val api: KhutbaApi = ApiFactory.api) {
                 adminDisplayName = adminDisplayName.trim(),
                 username = username.trim(),
                 password = password,
-                permissionPassword = permissionPassword,
+                contactEmail = contactEmail,
             ),
         )
-        return login(username, password, "MOSQUE")
     }
 
     fun logout() {
@@ -74,6 +78,7 @@ class KhutbaRepository(private val api: KhutbaApi = ApiFactory.api) {
     }
 
     suspend fun mosques() = api.mosques()
+    suspend fun liveState(sermonId: String) = api.liveState(sermonId)
 
     suspend fun publishedSermons(mosqueId: String, language: String?) =
         api.publishedSermons(mosqueId, language?.ifBlank { null })
@@ -93,9 +98,9 @@ class KhutbaRepository(private val api: KhutbaApi = ApiFactory.api) {
 
     suspend fun adminProfile() = api.adminProfile(authorization())
 
-    suspend fun updateMosqueName(mosqueName: String) = api.updateAdminProfile(
+    suspend fun updateMosqueName(mosqueName: String, city: String) = api.updateAdminProfile(
         authorization(),
-        MosqueProfileUpdateRequest(mosqueName.trim()),
+        MosqueProfileUpdateRequest(mosqueName.trim(), city.trim()),
     )
 
     suspend fun changePassword(currentPassword: String, newPassword: String) =
@@ -168,6 +173,12 @@ class KhutbaRepository(private val api: KhutbaApi = ApiFactory.api) {
         api.translate(authorization(), sermonId)
     }
 
+    suspend fun createDanish(sermonId: String): SermonSummary =
+        api.createDanish(authorization(), sermonId)
+
+    suspend fun updateSermonTitle(sermonId: String, title: String) =
+        api.updateSermonTitle(authorization(), sermonId, mapOf("title" to title.trim()))
+
     suspend fun reviewSegment(
         sermonId: String,
         segmentId: String,
@@ -182,6 +193,12 @@ class KhutbaRepository(private val api: KhutbaApi = ApiFactory.api) {
     )
 
     suspend fun publish(sermonId: String) = api.publish(authorization(), sermonId)
+
+    suspend fun glossaryCandidates(sermonId: String) =
+        api.glossaryCandidates(authorization(), sermonId)
+
+    suspend fun contributeGlossary(sermonId: String, request: GlossaryContribution) =
+        api.contributeGlossary(authorization(), sermonId, request)
 
     private fun String.textBody() = trim().toRequestBody("text/plain".toMediaType())
 
@@ -238,21 +255,24 @@ private fun HttpException.serverDetail(): String? {
     }.getOrNull()
 }
 
-private const val SCHEDULED_SERVICE_MESSAGE =
-    "The Khutba app is available every Friday from 10:00 AM to 3:00 PM Copenhagen time. " +
-        "The service is currently offline; please try again during this window."
+private const val SERVICE_HOURS =
+    "Normal service hours are Friday, 10:00 AM–3:00 PM Copenhagen time. " +
+        "Outside these hours the server may be switched off."
 
 fun Throwable.userMessage(): String = when (this) {
     is HttpException -> if (code() in 502..504) {
-        SCHEDULED_SERVICE_MESSAGE
+        "The server is temporarily unavailable (${code()}). If it was just started, " +
+            "wait a minute and try again. $SERVICE_HOURS"
     } else {
         serverDetail() ?: "Server rejected the request (${code()}): ${message()}"
     }
+    is UnknownHostException ->
+        "Cannot resolve the API address. Check your internet connection or DNS and try again. $SERVICE_HOURS"
+    is SocketTimeoutException ->
+        "The API took too long to respond. Check your connection and try again. $SERVICE_HOURS"
     is ConnectException,
     is NoRouteToHostException,
     is SocketException,
-    is SocketTimeoutException,
-    is UnknownHostException,
-    -> SCHEDULED_SERVICE_MESSAGE
+    -> "Cannot connect to the API. Check your internet connection and try again. $SERVICE_HOURS"
     else -> message ?: "Unexpected error"
 }

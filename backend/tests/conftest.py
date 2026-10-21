@@ -79,3 +79,18 @@ def login_headers(
     )
     assert response.status_code == 200, response.text
     return {"Authorization": f"Bearer {response.json()['access_token']}"}
+
+
+@pytest.fixture
+def owner_headers(client):
+    with SessionLocal() as db:
+        owner = User(
+            username="owner",
+            display_name="Owner",
+            role=UserRole.SUPER_ADMIN,
+            password_hash=hash_password("owner123"),
+            contact_email="owner@example.com",
+        )
+        db.add(owner)
+        db.commit()
+    return login_headers(client, "owner", "owner123")

@@ -8,6 +8,8 @@ from uuid import uuid4
 from zipfile import BadZipFile, ZipFile
 
 from docx import Document
+from docx.table import Table
+from docx.text.paragraph import Paragraph
 from fastapi import HTTPException, UploadFile, status
 from pypdf import PdfReader
 
@@ -112,16 +114,22 @@ def _extract_pdf_text(content: bytes) -> tuple[str, int]:
 
 
 def _extract_docx_text(content: bytes) -> str:
+    def blocks_in_order(container):
+        for block in container.iter_inner_content():
+            if isinstance(block, Paragraph):
+                if block.text.strip():
+                    yield block.text.strip()
+            elif isinstance(block, Table):
+                seen_cells = set()
+                for row in block.rows:
+                    for cell in row.cells:
+                        if cell._tc not in seen_cells:
+                            seen_cells.add(cell._tc)
+                            yield from blocks_in_order(cell)
+
     try:
         document = Document(BytesIO(content))
-        blocks = [
-            paragraph.text.strip() for paragraph in document.paragraphs if paragraph.text.strip()
-        ]
-        for table in document.tables:
-            for row in table.rows:
-                cells = [cell.text.strip() for cell in row.cells if cell.text.strip()]
-                if cells:
-                    blocks.append(" | ".join(cells))
+        blocks = list(blocks_in_order(document))
     except Exception as exc:
         raise ValueError("The DOCX document could not be read") from exc
     return "\n\n".join(blocks).strip()
@@ -197,12 +205,41 @@ def _normalized_arabic_with_offsets(value: str) -> tuple[str, list[int]]:
     return "".join(characters), offsets
 
 
+def _quotation_ranges(text: str) -> list[tuple[int, int]]:
+    """Protect nested, multiline and long quotations independently of retrieval limits."""
+    pairs = dict(zip("﴿«“‘❝‹「『《〈([{（【〔", "﴾»”’❞›」』》〉)]}）】〕", strict=True))
+    stack: list[tuple[str, int]] = []
+    ranges: list[tuple[int, int]] = []
+    for index, character in enumerate(text):
+        if character in {'"', "'"}:
+            # Apostrophes within words are not quotation boundaries.
+            if character == "'" and 0 < index < len(text) - 1:
+                if text[index - 1].isalnum() and text[index + 1].isalnum():
+                    continue
+            if stack and stack[-1][0] == character:
+                _, start = stack.pop()
+                ranges.append((start, index + 1))
+            else:
+                stack.append((character, index))
+        elif stack and character == stack[-1][0]:
+            _, start = stack.pop()
+            ranges.append((start, index + 1))
+        elif character in pairs:
+            stack.append((pairs[character], index))
+    # A damaged PDF may omit a closing quote. Keep its remaining text together.
+    ranges.extend((start, len(text)) for _, start in stack)
+    return ranges
+
+
 def _khutba_parts(text: str) -> list[str]:
     normalized, offsets = _normalized_arabic_with_offsets(text)
+    protected = _quotation_ranges(text)
     boundaries = [
         offsets[match.end() - 1] + 1
         for match in KHUTBA_CLOSE_RE.finditer(normalized)
-        if match.end() > 0
+        if match.end() > 0 and not any(
+            left <= offsets[match.start()] < right for left, right in protected
+        )
     ]
     if not boundaries:
         return [text]
@@ -222,32 +259,28 @@ def _khutba_parts(text: str) -> list[str]:
 
 
 def _safe_long_pieces(value: str, max_chars: int) -> list[str]:
-    from app.services.canonical_sources import bounded_passage_candidates
-
-    protected = [
-        (passage.start, passage.end)
-        for passage in bounded_passage_candidates(value)
-        if passage.start is not None and passage.end is not None
-    ]
+    # Size is a target, not permission to break prose at an arbitrary word.
+    # Single PDF line breaks are layout artifacts; only blank lines divide paragraphs.
+    protected = _quotation_ranges(value)
+    boundaries = []
+    for match in re.finditer(r"\n\s*\n", value):
+        end = match.end()
+        if any(left < end < right for left, right in protected):
+            continue
+        before, after = value[:match.start()].rstrip(), value[end:].lstrip()
+        # Keep an introducing colon and a trailing source reference with the quotation.
+        if before.endswith((":", "：")) or after.startswith(("[", "（", "(")):
+            continue
+        boundaries.append(end)
+    boundaries.append(len(value))
     pieces: list[str] = []
     start = 0
-    while len(value) - start > max_chars:
-        target = start + max_chars
-        candidates = [
-            match.end()
-            for match in re.finditer(r"\s+", value[start:target])
-            if not any(
-                protected_start < start + match.end() < protected_end
-                for protected_start, protected_end in protected
-            )
-        ]
-        end = start + candidates[-1] if candidates else target
-        piece = value[start:end].strip()
-        if piece:
-            pieces.append(piece)
-        start = end
-        while start < len(value) and value[start].isspace():
-            start += 1
+    previous = 0
+    for end in boundaries:
+        if end - start > max_chars and previous > start:
+            pieces.append(value[start:previous].strip())
+            start = previous
+        previous = end
     remainder = value[start:].strip()
     if remainder:
         pieces.append(remainder)
@@ -255,30 +288,9 @@ def _safe_long_pieces(value: str, max_chars: int) -> list[str]:
 
 
 def split_text(text: str, max_chars: int = 2800) -> list[str]:
+    if max_chars < 1:
+        raise ValueError("Segment size must be positive")
     segments: list[str] = []
-    current = ""
-    khutba_parts = _khutba_parts(text)
-    for part_index, khutba_part in enumerate(khutba_parts):
-        paragraphs = [
-            re.sub(r"[ \t]+", " ", value).strip() for value in re.split(r"\n\s*\n", khutba_part)
-        ]
-        for paragraph in (value for value in paragraphs if value):
-            sentences = (
-                [item.strip() for item in re.split(r"(?<=[.!؟؛])\s+", paragraph) if item.strip()]
-                if len(paragraph) > max_chars
-                else [paragraph]
-            )
-            for sentence in sentences:
-                for piece in _safe_long_pieces(sentence, max_chars):
-                    candidate = f"{current}\n\n{piece}".strip() if current else piece
-                    if current and len(candidate) > max_chars:
-                        segments.append(current)
-                        current = piece
-                    else:
-                        current = candidate
-        if part_index < len(khutba_parts) - 1 and current:
-            segments.append(current)
-            current = ""
-    if current:
-        segments.append(current)
+    for part in _khutba_parts(text):
+        segments.extend(_safe_long_pieces(part, max_chars))
     return segments

@@ -34,6 +34,7 @@ from app.services.providers.base import (
 )
 from app.services.retrieval import RetrievedSource, SourceOccurrence
 from app.services.sermon_titles import infer_translated_title
+from app.services.sunnah_evidence import verify_sunnah_source
 
 SUNNAH_HADITH_NUMBER_RE = re.compile(r"^[0-9]+[a-z]?$", re.IGNORECASE)
 PREFERRED_SUNNAH_COLLECTIONS = {"muslim": 0, "bukhari": 1, "tirmidhi": 2}
@@ -186,7 +187,15 @@ def _citation_payloads(
 ) -> list[dict[str, object]]:
     spans = _canonical_translation_spans(translated_text, source)
     expected = max(1, len(source.occurrences))
-    selected_spans: list[tuple[int, int] | None] = list(spans[:expected]) or [None]
+    # A short shared phrase can occur in an earlier, different verse. Prefer the
+    # most complete canonical matches, then retain document order for repeats.
+    ranked = sorted(
+        spans,
+        key=lambda span: (-len(ENGLISH_SOURCE_TOKEN_RE.findall(
+            translated_text[span[0]:span[1]]
+        )), span[0]),
+    )
+    selected_spans: list[tuple[int, int] | None] = sorted(ranked[:expected]) or [None]
     payloads: list[dict[str, object]] = []
     for index, span in enumerate(selected_spans):
         occurrence = source.occurrences[index] if index < len(source.occurrences) else None
@@ -297,6 +306,9 @@ def _validate_sunnah_source(
     candidate_number = candidate.hadith_number.strip().lower()
     if not SUNNAH_HADITH_NUMBER_RE.fullmatch(candidate_number):
         return None, "the Hadith number was not usable"
+    direct_reference = re.fullmatch(r"/[^/:]+:([0-9]+[a-z]?)/?", unquote(parsed.path), re.I)
+    if direct_reference and direct_reference.group(1).lower() != candidate_number:
+        return None, "the Hadith number conflicted with the referenced Sunnah.com page"
     overlap = arabic_word_overlap(passage_text, candidate.arabic_text)
     if overlap < 0.70:
         return None, f"Arabic overlap was {overlap:.0%}, below the required 70%"
@@ -356,6 +368,7 @@ async def _sunnah_web_fallback(
     arabic_text: str,
     existing_sources: list[RetrievedSource],
     max_concurrency: int = 3,
+    http_client: httpx.AsyncClient | None = None,
 ) -> tuple[list[RetrievedSource], list[str]]:
     passages = hadith_web_search_candidates(arabic_text)
     if not passages:
@@ -397,7 +410,18 @@ async def _sunnah_web_fallback(
                 arabic_text,
             )
             if source is not None:
-                validated.append((arabic_word_overlap(passage.text, candidate.arabic_text), source))
+                async with semaphore:
+                    if http_client is None:
+                        async with httpx.AsyncClient() as evidence_client:
+                            rejection_reason = await verify_sunnah_source(source, evidence_client)
+                    else:
+                        rejection_reason = await verify_sunnah_source(source, http_client)
+                if rejection_reason:
+                    rejection_reasons.append(rejection_reason)
+                else:
+                    validated.append(
+                        (arabic_word_overlap(passage.text, candidate.arabic_text), source)
+                    )
             elif rejection_reason:
                 rejection_reasons.append(rejection_reason)
         ranked_sources = sorted(
@@ -470,6 +494,7 @@ async def _canonical_sources_for_segment(
             arabic_text,
             hadith.sources,
             sunnah_web_search_concurrency,
+            getattr(canonical_service, "client", None),
         )
     quran = await canonical_service.retrieve_quran(arabic_text)
     sources = deduplicate_embedded_quran_sources(hadith.sources + web_sources + quran.sources)
@@ -572,6 +597,11 @@ async def run_translation_job(sermon_id: str) -> None:
                         translated_text,
                         verified_uncertain_terms,
                         glossary_catalog,
+                        protected_spans=[
+                            span
+                            for source in canonical_sources
+                            for span in _canonical_translation_spans(translated_text, source)
+                        ],
                     )
                     issues.extend(glossary_issues)
                     issues.extend(f"Uncertain term: {term}" for term in verified_uncertain_terms)
@@ -599,6 +629,9 @@ async def run_translation_job(sermon_id: str) -> None:
                         for source in missing_transliterations
                     )
                     segment.translated_text = translated_text
+                    segment.localized_glossary = [phrase.model_dump() for phrase in (
+                        verification.glossary_phrases or draft.glossary_phrases
+                    )]
                     segment.citations = [
                         citation
                         for item in valid_citation_ids

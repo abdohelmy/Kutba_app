@@ -1,3 +1,4 @@
+import re
 from datetime import UTC, date, datetime
 
 from fastapi import (
@@ -12,7 +13,9 @@ from fastapi import (
     status,
 )
 from sqlalchemy import func, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
+from starlette.concurrency import run_in_threadpool
 
 from app.api.dependencies import assert_mosque_access, require_mosque_admin
 from app.core.security import hash_password, verify_password
@@ -27,6 +30,7 @@ from app.models import (
     UserRole,
     VerificationStatus,
 )
+from app.models.entities import GlobalGlossaryTerm
 from app.schemas.auth import MosqueProfileUpdateRequest, PasswordChangeRequest
 from app.schemas.content import (
     MosqueGlossaryTermRequest,
@@ -38,6 +42,7 @@ from app.schemas.content import (
     SegmentReviewRequest,
     SermonDetailResponse,
     SermonSummaryResponse,
+    SermonTitleRequest,
     SourceTextReviewRequest,
     TranslationQueuedResponse,
 )
@@ -51,11 +56,112 @@ from app.services.documents import (
     validate_arabic_text,
 )
 from app.services.glossary import build_glossary_entry, normalized_arabic_key
+from app.services.glossary_contributions import (
+    GlossaryCandidate,
+    GlossaryContribution,
+    global_term_key,
+    missing_glossary_candidates,
+)
 from app.services.ocr import OcrProcessingError, OcrUnavailableError
+from app.services import live_sessions as live
+from app.services.sentence_alignment import (
+    AlignedSentence, AlignmentRequest, align_sentences, cached_alignment,
+)
 from app.services.sermon_titles import infer_source_title
 from app.services.translation import run_translation_job
 
 router = APIRouter(prefix="/admin", tags=["admin"])
+
+
+@router.post("/sermons/{sermon_id}/danish", response_model=SermonSummaryResponse)
+def create_danish_translation(
+    sermon_id: str, background_tasks: BackgroundTasks,
+    user: User = Depends(require_mosque_admin), db: Session = Depends(get_db),
+) -> Sermon:
+    from app.services.danish import english_revision, run_danish_job
+
+    parent = load_admin_sermon(db, user, sermon_id)
+    if (parent.target_language != "en" or parent.status != SermonStatus.PUBLISHED
+            or not parent.segments or any(
+                s.verification_status != VerificationStatus.HUMAN_APPROVED
+                for s in parent.segments)):
+        raise HTTPException(409, "Publish the approved English version before creating Danish")
+    existing = db.scalar(select(Sermon).where(Sermon.english_sermon_id == parent.id,
+                                             Sermon.target_language == "da"))
+    if existing:
+        return existing
+    child = Sermon(
+        mosque_id=parent.mosque_id, title=parent.title, khutba_date=parent.khutba_date,
+        target_language="da", english_sermon_id=parent.id,
+        english_revision=english_revision(parent), arabic_text=parent.arabic_text,
+        source_file_path=parent.source_file_path, source_file_sha256=parent.source_file_sha256,
+        created_by=user.id, status=SermonStatus.TRANSLATING,
+        segments=[SermonSegment(ordinal=s.ordinal, arabic_text=s.arabic_text)
+                  for s in parent.segments],
+    )
+    db.add(child)
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(409, "Danish translation already exists") from None
+    background_tasks.add_task(run_danish_job, child.id)
+    return child
+
+
+@router.get("/sermons/{sermon_id}/glossary-candidates", response_model=list[GlossaryCandidate])
+def glossary_candidates(
+    sermon_id: str, db: Session = Depends(get_db), user: User = Depends(require_mosque_admin),
+):
+    sermon = load_admin_sermon(db, user, sermon_id)
+    if sermon.status != SermonStatus.PUBLISHED:
+        raise HTTPException(409, "Publish this khutba before adding shared definitions")
+    if sermon.target_language != "en":
+        raise HTTPException(409, "Add shared definitions through the English version")
+    return missing_glossary_candidates(db, sermon)
+
+
+@router.post("/sermons/{sermon_id}/glossary-contributions", status_code=201)
+def contribute_glossary(
+    sermon_id: str, payload: GlossaryContribution,
+    db: Session = Depends(get_db), user: User = Depends(require_mosque_admin),
+):
+    candidates = glossary_candidates(sermon_id, db, user)
+    candidate = next((item for item in candidates if item.segment_id == payload.segment_id
+                      and item.arabic_term == payload.arabic_term), None)
+    if candidate is None:
+        raise HTTPException(409, "This term is no longer missing; refresh the list")
+    phrase = payload.literal_translation.strip()
+    meaning = payload.meaning.strip()
+    if not phrase or len(meaning) < 3:
+        raise HTTPException(422, "Enter the English phrase and a definition")
+    # Require the entire user-selected expression immediately before its Arabic note.
+    pattern = re.compile(
+        r"(?<![\w-])" + re.escape(phrase) + r"\s*\(\s*"
+        + re.escape(candidate.arabic_term) + r"\s*\)", re.IGNORECASE,
+    )
+    if not pattern.search(candidate.sentence):
+        raise HTTPException(422, "Use the exact English phrase before the Arabic parentheses")
+    key = global_term_key(candidate.arabic_term)
+    term = db.scalar(select(GlobalGlossaryTerm).where(GlobalGlossaryTerm.normalized_term == key))
+    if term is None:
+        term = GlobalGlossaryTerm(normalized_term=key)
+        db.add(term)
+    elif term.approval_status != "REJECTED":
+        raise HTTPException(409, "This term is already submitted; refresh the list")
+    term.arabic_term = candidate.arabic_term
+    term.literal_translation = phrase
+    term.meaning = meaning
+    term.created_by = user.id
+    term.approval_status = "APPROVED" if user.role == UserRole.SUPER_ADMIN else "PENDING"
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(
+            409, "Another admin already added this term; refresh the list"
+        ) from None
+    return {"status": "saved" if term.approval_status == "APPROVED" else "pending_approval"}
 
 
 def resolve_admin_mosque(user: User, requested_mosque_id: str | None) -> str:
@@ -160,6 +266,8 @@ def update_mosque_profile(
     if duplicate:
         raise HTTPException(status.HTTP_409_CONFLICT, "Mosque name is already registered")
     mosque.name = mosque_name
+    if payload.city is not None:
+        mosque.city = payload.city.strip()
     db.commit()
     db.refresh(mosque)
     return mosque
@@ -208,6 +316,7 @@ def create_mosque_glossary_term(
     values = glossary_values(payload)
     assert_unique_glossary_term(db, mosque.id, values["normalized_term"])
     term = MosqueGlossaryTerm(mosque_id=mosque.id, **values)
+    term.approval_status = "APPROVED" if user.role == UserRole.SUPER_ADMIN else "PENDING"
     db.add(term)
     db.commit()
     db.refresh(term)
@@ -231,6 +340,7 @@ def update_mosque_glossary_term(
     )
     for field, value in values.items():
         setattr(term, field, value)
+    term.approval_status = "APPROVED" if user.role == UserRole.SUPER_ADMIN else "PENDING"
     db.commit()
     db.refresh(term)
     return term
@@ -259,9 +369,12 @@ async def upload_sermon(
     db: Session = Depends(get_db),
 ) -> Sermon:
     resolved_mosque_id = resolve_admin_mosque(user, mosque_id)
+    if target_language.lower() != "en":
+        raise HTTPException(422, "Upload in English first; create Danish after English approval")
     document = await read_document_upload(file)
     try:
-        arabic_text = extract_document_text(
+        arabic_text = await run_in_threadpool(
+            extract_document_text,
             document,
             require_arabic=True,
             allow_ocr=True,
@@ -272,7 +385,7 @@ async def upload_sermon(
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
-    file_path, digest = store_document(document, "sermons")
+    file_path, digest = await run_in_threadpool(store_document, document, "sermons")
     try:
         supplied_title = title.strip() if title else ""
         sermon = Sermon(
@@ -323,7 +436,38 @@ def get_admin_sermon(
     user: User = Depends(require_mosque_admin),
     db: Session = Depends(get_db),
 ) -> Sermon:
-    return load_admin_sermon(db, user, sermon_id)
+    sermon = load_admin_sermon(db, user, sermon_id)
+    if sermon.english_sermon_id:
+        parent = db.get(Sermon, sermon.english_sermon_id)
+        originals = {s.ordinal: s.translated_text for s in parent.segments} if parent else {}
+        for segment in sermon.segments:
+            segment.english_text = originals.get(segment.ordinal)
+    return sermon
+
+
+@router.patch("/sermons/{sermon_id}/title", response_model=SermonSummaryResponse)
+def update_sermon_title(
+    sermon_id: str, payload: SermonTitleRequest,
+    user: User = Depends(require_mosque_admin), db: Session = Depends(get_db),
+) -> Sermon:
+    from app.services.danish import english_revision
+
+    sermon = load_admin_sermon(db, user, sermon_id)
+    title = payload.title.strip()
+    if not title:
+        raise HTTPException(422, "Enter a khutba title")
+    if sermon.status == SermonStatus.TRANSLATING:
+        raise HTTPException(409, "Wait for translation to finish before editing the title")
+    previous_revision = english_revision(sermon)
+    sermon.title = title
+    sermon.title_is_inferred = False
+    # A title-only edit does not invalidate the reviewed Danish body, nor overwrite
+    # its separately editable Danish title. Never revive an already-stale version.
+    for child in db.scalars(select(Sermon).where(Sermon.english_sermon_id == sermon.id)):
+        if child.english_revision == previous_revision:
+            child.english_revision = english_revision(sermon)
+    db.commit()
+    return sermon
 
 
 @router.delete("/sermons/{sermon_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -333,10 +477,18 @@ def delete_admin_sermon(
     db: Session = Depends(get_db),
 ) -> Response:
     sermon = load_admin_sermon(db, user, sermon_id)
+    if sermon.status == SermonStatus.TRANSLATING or db.scalar(select(Sermon.id).where(
+        Sermon.english_sermon_id == sermon.id, Sermon.status == SermonStatus.TRANSLATING,
+    )):
+        raise HTTPException(409, "Wait for translation to finish before deleting this khutba")
     source_file_path = sermon.source_file_path
+    for child in db.scalars(select(Sermon).where(Sermon.english_sermon_id == sermon.id)):
+        db.delete(child)
+    db.flush()
     db.delete(sermon)
     db.commit()
-    remove_stored_file(source_file_path)
+    if not sermon.english_sermon_id:
+        remove_stored_file(source_file_path)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -358,8 +510,9 @@ def hide_admin_sermon(
 
 
 @router.post("/sermons/{sermon_id}/show", response_model=SermonSummaryResponse)
-def show_admin_sermon(
+async def show_admin_sermon(
     sermon_id: str,
+    background_tasks: BackgroundTasks,
     user: User = Depends(require_mosque_admin),
     db: Session = Depends(get_db),
 ) -> Sermon:
@@ -369,8 +522,12 @@ def show_admin_sermon(
             status.HTTP_409_CONFLICT,
             "Only a hidden khutba can be shown",
         )
+    from app.services.danish import english_is_current
+    if not english_is_current(sermon, db):
+        raise HTTPException(409, "English changed or is hidden; recreate Danish before showing it")
     sermon.status = SermonStatus.PUBLISHED
     db.commit()
+    live.queue_preparation(background_tasks, sermon.english_sermon_id or sermon.id)
     return sermon
 
 
@@ -416,6 +573,21 @@ def translate_sermon(
     db: Session = Depends(get_db),
 ) -> TranslationQueuedResponse:
     sermon = load_admin_sermon(db, user, sermon_id)
+    if sermon.english_sermon_id:
+        from app.services.danish import english_is_current, run_danish_job
+        if not english_is_current(sermon, db):
+            raise HTTPException(409, "English changed; remove the Danish draft and create it again")
+        if sermon.status != SermonStatus.FAILED:
+            raise HTTPException(409, "Danish translation is not ready to retry")
+        claimed = db.execute(update(Sermon).where(
+            Sermon.id == sermon.id, Sermon.status == SermonStatus.FAILED
+        ).values(status=SermonStatus.TRANSLATING, failure_reason=None))
+        if claimed.rowcount != 1:
+            db.rollback()
+            raise HTTPException(409, "Translation is already running")
+        db.commit()
+        background_tasks.add_task(run_danish_job, sermon.id)
+        return TranslationQueuedResponse(id=sermon.id, status=SermonStatus.TRANSLATING)
     if sermon.status not in {SermonStatus.DRAFT, SermonStatus.FAILED}:
         raise HTTPException(
             status.HTTP_409_CONFLICT,
@@ -429,9 +601,64 @@ def translate_sermon(
     if claimed.rowcount != 1:
         db.rollback()
         raise HTTPException(status.HTTP_409_CONFLICT, "Translation is already running")
+    if not any(segment.translated_text for segment in sermon.segments):
+        # Older drafts may have been split inside quotations. Rebuild only untouched
+        # drafts; retries with completed sections must preserve those saved results.
+        pieces = split_text(sermon.arabic_text)
+        if not pieces:
+            db.rollback()
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Source text is required")
+        if pieces != [segment.arabic_text for segment in sermon.segments]:
+            sermon.segments.clear()
+            db.flush()
+            sermon.segments = [
+                SermonSegment(ordinal=index, arabic_text=value)
+                for index, value in enumerate(pieces)
+            ]
     db.commit()
     background_tasks.add_task(run_translation_job, sermon.id)
     return TranslationQueuedResponse(id=sermon.id, status=SermonStatus.TRANSLATING)
+
+
+@router.post("/sermons/{sermon_id}/segments/{segment_id}/alignment",
+             response_model=list[AlignedSentence])
+async def segment_alignment(
+    sermon_id: str, segment_id: str, payload: AlignmentRequest,
+    user: User = Depends(require_mosque_admin), db: Session = Depends(get_db),
+) -> list[AlignedSentence]:
+    sermon = load_admin_sermon(db, user, sermon_id)
+    segment = next((item for item in sermon.segments if item.id == segment_id), None)
+    if segment is None:
+        raise HTTPException(404, "Segment not found")
+    if (payload.translated_text == segment.translated_text
+            and segment.live_alignment.get("revision") == live.segment_revision(segment)
+            and segment.live_alignment.get("links")):
+        return [AlignedSentence.model_validate(link) for link in segment.live_alignment["links"]]
+    english = None
+    if sermon.english_sermon_id:
+        english = db.scalar(select(SermonSegment.translated_text).where(
+            SermonSegment.sermon_id == sermon.english_sermon_id,
+            SermonSegment.ordinal == segment.ordinal,
+        ))
+    try:
+        arabic = segment.arabic_text
+        links = await align_sentences(arabic, payload.translated_text, english)
+        # Persist metadata only when the requested draft still equals saved text.
+        # Unsaved drafts remain in the exact-text cache and can be reused on Save.
+        db.refresh(segment)
+        if links and segment.arabic_text == arabic and segment.translated_text == payload.translated_text:
+            segment.live_alignment = {
+                "revision": live.segment_revision(segment),
+                "links": [link.model_dump() for link in links],
+            }
+            db.commit()
+        return links
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(
+            503, "Arabic highlighting could not load. You can continue editing."
+        ) from exc
 
 
 @router.patch("/sermons/{sermon_id}/segments/{segment_id}", response_model=SegmentResponse)
@@ -457,7 +684,36 @@ def review_segment(
     )
     if payload.approved and citation_issues:
         raise HTTPException(status.HTTP_409_CONFLICT, "\n".join(citation_issues))
+    changed = edited != segment.translated_text
     segment.translated_text = edited
+    english = None
+    if sermon.english_sermon_id:
+        english = db.scalar(select(SermonSegment.translated_text).where(
+            SermonSegment.sermon_id == sermon.english_sermon_id,
+            SermonSegment.ordinal == segment.ordinal,
+        ))
+    links = cached_alignment(segment.arabic_text, edited, english)
+    if links:
+        segment.live_alignment = {
+            "revision": live.segment_revision(segment),
+            "links": [link.model_dump() for link in links],
+        }
+    elif changed:
+        segment.live_alignment = {}
+    if payload.localized_definitions is not None:
+        if sermon.target_language != "da":
+            raise HTTPException(422, "Localized definitions are only for Danish translations")
+        definitions = {t.arabic_term: t for t in payload.localized_definitions}
+        if any(not t.meaning.strip() or not t.localized_phrase.strip()
+               for t in payload.localized_definitions):
+            raise HTTPException(422, "Danish phrases and definitions cannot be blank")
+        expected = {t["arabic_term"] for t in segment.localized_glossary}
+        if len(definitions) != len(payload.localized_definitions) or set(definitions) != expected:
+            raise HTTPException(422, "Keep the existing Arabic terms when reviewing definitions")
+        segment.localized_glossary = [dict(
+            t, localized_phrase=definitions[t["arabic_term"]].localized_phrase.strip(),
+            meaning=definitions[t["arabic_term"]].meaning.strip(),
+        ) for t in segment.localized_glossary]
     segment.citations = citations
     segment.issues = [
         issue for issue in segment.issues if not issue.startswith(REVIEW_PREFIX)
@@ -486,19 +742,25 @@ def preview_sermon(
 
 
 @router.post("/sermons/{sermon_id}/publish", response_model=PublishResponse)
-def publish_sermon(
+async def publish_sermon(
     sermon_id: str,
+    background_tasks: BackgroundTasks,
     user: User = Depends(require_mosque_admin),
     db: Session = Depends(get_db),
 ) -> PublishResponse:
     sermon = load_admin_sermon(db, user, sermon_id)
+    from app.services.danish import english_is_current
+    if not english_is_current(sermon, db):
+        raise HTTPException(409, "English changed or is hidden; recreate Danish before publication")
     if sermon.status != SermonStatus.REVIEW_REQUIRED:
         raise HTTPException(status.HTTP_409_CONFLICT, "Sermon is not ready for publication")
+    if not sermon.segments:
+        raise HTTPException(status.HTTP_409_CONFLICT, "The khutba has no sections to publish")
     unapproved = [
         segment.ordinal
         for segment in sermon.segments
         if segment.verification_status != VerificationStatus.HUMAN_APPROVED
-        or not segment.translated_text
+        or not (segment.translated_text or "").strip()
     ]
     if unapproved:
         raise HTTPException(
@@ -508,6 +770,7 @@ def publish_sermon(
     sermon.status = SermonStatus.PUBLISHED
     sermon.published_at = datetime.now(UTC)
     db.commit()
+    live.queue_preparation(background_tasks, sermon.english_sermon_id or sermon.id)
     return PublishResponse(
         id=sermon.id, status=SermonStatus.PUBLISHED, published_at=sermon.published_at
     )

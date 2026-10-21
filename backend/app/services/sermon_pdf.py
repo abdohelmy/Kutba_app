@@ -309,7 +309,7 @@ def build_sermon_pdf(sermon: ReaderSermonDetailResponse, mosque_name: str) -> by
         bottomMargin=20 * mm,
         title=sermon.title,
         author=mosque_name,
-        subject="English khutba translation with numbered canonical references",
+        subject="Reviewed khutba translation with numbered source references",
     )
     base = getSampleStyleSheet()
     title_style = ParagraphStyle(
@@ -393,7 +393,7 @@ def build_sermon_pdf(sermon: ReaderSermonDetailResponse, mosque_name: str) -> by
             metadata_style,
         ),
         Paragraph(
-            "This download contains the reviewed English translation. Numbered squares "
+            "This download contains the reviewed translation. Numbered squares "
             "after Qur'an verses and hadiths refer to the sources section at the end.",
             small_style,
         ),
@@ -440,10 +440,11 @@ def build_sermon_pdf(sermon: ReaderSermonDetailResponse, mosque_name: str) -> by
             citation = numbered.citation
             reference = citation.display_reference or citation.title
             kind = "Qur'an" if citation.source_kind == "quran" else "Hadith"
+            wording_label = "Danish rendering" if sermon.target_language == "da" else "Canonical English"
             details = [
                 f"{_marker_html(numbered.number, bold_font)} <b>{kind}: "
                 f"{escape(reference)}</b>",
-                f"<br/><b>Canonical English:</b> {escape(citation.excerpt)}",
+                f"<br/><b>{wording_label}:</b> {escape(citation.excerpt)}",
             ]
             if citation.transliteration:
                 details.append(
@@ -470,7 +471,7 @@ def build_sermon_pdf(sermon: ReaderSermonDetailResponse, mosque_name: str) -> by
         story.append(Paragraph("Glossary", section_style))
         for term in all_glossary:
             details = (
-                f"<b>{escape(term.display_term)}</b>"
+                f"<b>{escape(term.localized_phrase or term.english_phrase or term.literal_translation)}</b>"
                 f"<br/><b>Meaning:</b> {escape(term.meaning)}"
             )
             if term.literal_translation:
@@ -500,7 +501,7 @@ def build_sermon_pdf(sermon: ReaderSermonDetailResponse, mosque_name: str) -> by
         canvas.line(document.leftMargin, 14 * mm, A4[0] - document.rightMargin, 14 * mm)
         canvas.setFont(regular_font, 7.5)
         canvas.setFillColor(MUTED)
-        canvas.drawString(document.leftMargin, 9 * mm, "Khutba - reviewed English translation")
+        canvas.drawString(document.leftMargin, 9 * mm, "Khutba - reviewed translation")
         canvas.drawRightString(A4[0] - document.rightMargin, 9 * mm, f"Page {doc.page}")
         canvas.restoreState()
 

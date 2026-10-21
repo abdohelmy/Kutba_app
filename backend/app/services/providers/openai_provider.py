@@ -3,6 +3,7 @@ import json
 from openai import AsyncOpenAI
 
 from app.services.glossary import GlossaryEntry
+from app.services.providers.alignment import ALIGNMENT_INSTRUCTIONS, SentenceLinks
 from app.services.providers.base import (
     SourceTransliteration,
     SunnahWebSearchResult,
@@ -10,6 +11,7 @@ from app.services.providers.base import (
     TranslationProvider,
     VerificationResult,
 )
+from app.services.providers.localization import DANISH_INSTRUCTIONS, DanishDraft
 from app.services.retrieval import RetrievedSource
 
 
@@ -95,7 +97,11 @@ Success criteria:
   title is metadata: do not add a new title line to the translated sermon text.
 
 Return the structured result only. Citations are evidence for reviewer inspection, not proof of
-infallibility. A human reviewer will approve or amend the result before publication."""
+infallibility. A human reviewer will approve or amend the result before publication.
+For every Arabic glossary parenthesis, return a glossary_phrases entry with its exact arabic_term,
+zero-based arabic_occurrence among identical notes, and phrase copied VERBATIM from the English
+immediately before that note. Include the complete corresponding expression, not just its final
+word or an entire unrelated clause. Never translate the phrase separately for the popup."""
 
 VERIFICATION_INSTRUCTIONS = """Act as an independent bilingual Islamic-content verifier.
 Compare the Arabic segment word-for-word and claim-for-claim with the proposed translation and
@@ -116,7 +122,12 @@ parenthesis to only the final word of a multi-word expression. Review the
 proposed source transliterations against each ARABIC SOURCE. Return a corrected Latin
 transliteration for every source with Arabic text, using its exact raw SOURCE ID; copy a supplied
 CANONICAL TRANSLITERATION exactly. Never include SOURCE ID values or [S:...] markers in
-corrected_translation. Return the structured result only."""
+corrected_translation. For every applicable Arabic glossary parenthesis return glossary_phrases:
+exact arabic_term, zero-based arabic_occurrence among identical notes, and the full English phrase
+copied VERBATIM from the FINAL corrected translation (or the proposed translation if unchanged)
+immediately before that note. Do not supply a dictionary synonym, a separate translation, only the
+last word of an expression, or an unrelated surrounding clause.
+Return the structured result only."""
 
 SUNNAH_WEB_SEARCH_INSTRUCTIONS = """Determine whether the supplied Arabic search excerpt is from a
 hadith by searching Sunnah.com. Search only the allowed Sunnah.com domain and rely only on pages you
@@ -137,6 +148,32 @@ class OpenAIResponsesProvider(TranslationProvider):
     """Responses adapter whose model boundary is text-only; uploaded files never enter it."""
 
     name = "openai"
+
+    async def align_sentences(self, payload: dict) -> SentenceLinks:
+        response = await self.client.responses.parse(
+            model=self.translation_model,
+            reasoning={"effort": "low"},
+            instructions=ALIGNMENT_INSTRUCTIONS,
+            input=json.dumps(payload, ensure_ascii=False),
+            store=False,
+            text_format=SentenceLinks,
+        )
+        if response.output_parsed is None:
+            raise RuntimeError("Sentence highlighting did not return a structured result")
+        return response.output_parsed
+
+    async def localize_danish(self, payload: dict) -> DanishDraft:
+        response = await self.client.responses.parse(
+            model=self.translation_model,
+            reasoning={"effort": "medium"},
+            instructions=DANISH_INSTRUCTIONS,
+            input=json.dumps(payload, ensure_ascii=False),
+            store=False,
+            text_format=DanishDraft,
+        )
+        if response.output_parsed is None:
+            raise RuntimeError("The Danish translation did not return a structured result")
+        return response.output_parsed
 
     def __init__(
         self,
@@ -236,6 +273,14 @@ class OpenAICompatibleProvider(TranslationProvider):
 
     name = "openai_compatible"
 
+    async def localize_danish(self, payload: dict) -> DanishDraft:
+        data = await self._json(
+            self.translation_model, DANISH_INSTRUCTIONS,
+            json.dumps({"schema": DanishDraft.model_json_schema(), "content": payload},
+                       ensure_ascii=False),
+        )
+        return DanishDraft.model_validate(data)
+
     def __init__(
         self,
         base_url: str,
@@ -259,6 +304,13 @@ class OpenAICompatibleProvider(TranslationProvider):
         if not content:
             raise RuntimeError("The local model returned an empty response")
         return json.loads(content)
+
+    async def align_sentences(self, payload: dict) -> SentenceLinks:
+        result = await self._json(
+            self.translation_model, ALIGNMENT_INSTRUCTIONS,
+            json.dumps(payload, ensure_ascii=False),
+        )
+        return SentenceLinks.model_validate(result)
 
     async def translate(
         self,
@@ -306,6 +358,14 @@ class OpenAICompatibleProvider(TranslationProvider):
 class MockProvider(TranslationProvider):
     name = "mock"
     model_name = "deterministic-test-provider"
+
+    async def localize_danish(self, payload: dict) -> DanishDraft:
+        return DanishDraft(
+            title="[da] " + payload["title"],
+            parts=[{"id": p["id"], "text": "[da] " + p["text"]} for p in payload["parts"]],
+            terms=[{"id": p["id"], "phrase": "[da] " + p["english_phrase"],
+                    "meaning": "[da] " + p["meaning"]} for p in payload["terms"]],
+        )
 
     async def translate(
         self,

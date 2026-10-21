@@ -1,9 +1,53 @@
 from app.services.glossary import (
+    build_glossary_entry,
     ensure_glossary_parentheticals,
     glossary_entries_in_arabic,
     glossary_matches,
     load_glossary,
 )
+
+
+def test_wrapped_phrase_preserves_full_original_range():
+    text = "I counsel you\n  and myself (أوصيكم ونفسي)."
+    match = next(m for m in glossary_matches("أوصيكم ونفسي", text)
+                 if m.entry.arabic_term == "أوصيكم ونفسي")
+    assert match.display_term == "I counsel you\n  and myself"
+    assert text[match.translation_start:match.translation_end] == match.display_term
+
+
+def test_typographic_apostrophe_and_nonbreaking_spaces_keep_phrase_complete():
+    text = "Follow Allah’s\u00a0established\u00a0way (سنة الله)."
+    match = next(m for m in glossary_matches("سنة الله", text)
+                 if m.entry.arabic_term == "سنة الله")
+    assert match.display_term == "Allah’s\u00a0established\u00a0way"
+
+
+def test_nonbreaking_hyphen_matches_without_model_parentheses():
+    text = "Cultivate God‑consciousness."
+    matches = glossary_matches("التقوى", text)
+    assert matches[0].display_term == "God‑consciousness"
+
+
+def test_unknown_paraphrase_does_not_guess_last_english_word():
+    entry = build_glossary_entry("ضيق الصدر", "Inner distress.", "tightness of chest")
+    text = "He felt a heavy burden within his heart (ضيق الصدر)."
+    matches = glossary_matches("ضيق الصدر", text, entries=(entry,))
+    assert matches[0].display_term == "ضيق الصدر"
+
+
+def test_phrase_matching_never_joins_separate_paragraphs():
+    entry = build_glossary_entry("ضيق الصدر", "Inner distress.", "tightness of chest")
+    text = "tightness of\n\nchest (ضيق الصدر)."
+    matches = glossary_matches("ضيق الصدر", text, entries=(entry,))
+    assert matches[0].display_term == "ضيق الصدر"
+
+
+def test_inserted_parenthetical_follows_entire_wrapped_expression():
+    text = "I counsel you\n and myself."
+    repaired, issues = ensure_glossary_parentheticals(
+        "أوصيكم ونفسي", text, ["أوصيكم ونفسي"])
+    assert repaired == "I counsel you\n and myself (أوصيكم ونفسي)."
+    assert not issues
 
 
 def test_backend_attaches_glossary_parenthetical_to_the_complete_expression():
@@ -28,7 +72,7 @@ def test_backend_attaches_glossary_parenthetical_to_the_complete_expression():
 def test_verified_glossary_loads_variations_and_alternative_contexts():
     entries = load_glossary()
 
-    assert len(entries) == 651
+    assert len(entries) == 659
     taqwa = next(entry for entry in entries if entry.arabic_term == "التقوى")
     assert any(
         form.arabic_term == "اِتَّقَى" and "guard against" in form.translation for form in taqwa.forms

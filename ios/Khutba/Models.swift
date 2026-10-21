@@ -1,5 +1,26 @@
 import Foundation
 
+struct LiveHighlight: Decodable, Equatable {
+    let segmentId: String
+    let start: Int
+    let end: Int
+    let excerpt: String
+}
+
+struct LiveState: Decodable {
+    let active: Bool
+    var status: String
+    let sequence: Int
+    let highlights: [LiveHighlight]
+}
+
+struct SentenceAlignment: Decodable {
+    var translationStart: Int
+    var translationEnd: Int
+    let arabicStart: Int
+    let arabicEnd: Int
+}
+
 struct LoginRequest: Encodable {
     let username: String
     let password: String
@@ -13,11 +34,12 @@ struct MosqueRegistrationRequest: Encodable {
     let adminDisplayName: String
     let username: String
     let password: String
-    let permissionPassword: String
+    let contactEmail: String
 }
 
 struct MosqueProfileUpdateRequest: Encodable {
     let mosqueName: String
+    var city: String? = nil
 }
 
 struct PasswordChangeRequest: Encodable {
@@ -92,6 +114,29 @@ struct GlossaryTerm: Codable, Identifiable, Equatable {
     let alternativeContextMeanings: String
     let translationStart: Int?
     let translationEnd: Int?
+    var englishPhrase: String? = nil
+    var localizedPhrase: String? = nil
+    var popupPhrase: String? = nil
+    var popupLanguage: String? = nil
+    var transliteration: String? = nil
+}
+
+struct GlossaryCandidate: Codable, Identifiable, Equatable {
+    var id: String { "\(segmentId)-\(arabicTerm)" }
+    let segmentId: String
+    let arabicTerm: String
+    let sentence: String
+}
+
+struct GlossaryContribution: Encodable {
+    let segmentId: String
+    let arabicTerm: String
+    let literalTranslation: String
+    let meaning: String
+}
+
+struct GlossarySavedResponse: Decodable {
+    let status: String
 }
 
 struct MosqueGlossaryTerm: Codable, Identifiable, Equatable {
@@ -101,9 +146,11 @@ struct MosqueGlossaryTerm: Codable, Identifiable, Equatable {
     let literalTranslation: String
     let arabicVariations: String
     let alternativeContextMeanings: String
+    var approvalStatus: String? = nil
 }
 
 struct SermonSegment: Codable, Identifiable, Equatable {
+    var englishText: String? = nil
     let id: String
     let ordinal: Int
     let arabicText: String?

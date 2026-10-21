@@ -6,11 +6,11 @@ from pypdf import PdfWriter
 from app.services.documents import DocumentKind, UploadedDocument, extract_document_text, split_text
 
 
-def test_split_text_keeps_order_and_bounds():
+def test_split_text_keeps_whole_paragraphs_with_a_soft_size_target():
     text = "\n\n".join(["الحمد لله " * 20, "أما بعد " * 20, "فاتقوا الله " * 20])
     segments = split_text(text, max_chars=150)
     assert len(segments) >= 3
-    assert all(len(segment) <= 150 for segment in segments)
+    assert segments == [paragraph.strip() for paragraph in text.split("\n\n")]
     assert segments[0].startswith("الحمد")
 
 
@@ -33,7 +33,7 @@ def test_long_segmentation_does_not_cut_inside_a_bounded_quotation():
 
     segments = split_text(text, max_chars=90)
 
-    assert all(len(segment) <= 90 for segment in segments)
+    assert segments == [text.strip()]
     assert any(quotation in segment for segment in segments)
 
 

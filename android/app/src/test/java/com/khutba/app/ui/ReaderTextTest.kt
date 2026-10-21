@@ -29,13 +29,18 @@ class ReaderTextTest {
         assertEquals(12, citationInsertionPoint("Remember Me.", source()))
     }
 
-    @Test fun completeGlossaryPhraseIsHighlightedAfterUnicode() {
+    @Test fun legacyEnglishAnchorHighlightsOnlyArabicAfterUnicode() {
         val phrase = "god-consciousness"
         val text = "🌙 $phrase (التقوى)"
         val term = GlossaryTerm("التقوى", "Mindfulness of Allah", phrase, phrase,
             translationStart = 2, translationEnd = 2 + phrase.length)
         val range = glossaryDisplayRange(text, term)!!
-        assertEquals(phrase, text.substring(range))
+        assertEquals("التقوى", text.substring(range))
+    }
+
+    @Test fun englishWithoutArabicNoteIsNeverHighlighted() {
+        val term = GlossaryTerm("التقوى", "Mindfulness", "God-consciousness", "God-consciousness")
+        assertNull(glossaryDisplayRange("Cultivate God-consciousness.", term))
     }
 
     @Test fun cacheSerializationPreservesArabicAndSourceDetails() {

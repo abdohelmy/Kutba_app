@@ -1,5 +1,7 @@
 package com.khutba.app.ui
 
+import androidx.compose.foundation.text.selection.SelectionContainer
+
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.BackHandler
@@ -31,6 +33,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.interaction.collectIsDraggedAsState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Logout
@@ -79,14 +82,17 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.Placeholder
 import androidx.compose.ui.text.PlaceholderVerticalAlign
@@ -95,6 +101,10 @@ import androidx.compose.ui.text.TextLinkStyles
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.TextFieldValue
+import com.khutba.app.model.SentenceAlignment
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.CancellationException
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDirection
 import androidx.compose.ui.unit.dp
@@ -167,6 +177,7 @@ fun KhutbaApp(state: KhutbaUiState, viewModel: MainViewModel) {
             Screen.ADMIN_HOME -> AdminHomeScreen(state, viewModel)
             Screen.ADMIN_SETTINGS -> AdminSettingsScreen(state, viewModel)
             Screen.ADMIN_SERMON -> AdminSermonScreen(state, viewModel)
+            Screen.ADMIN_DEFINITIONS -> PostPublishDefinitionsScreen(state, viewModel)
         }
         if (state.loading && state.screen !in listOf(Screen.READER_MOSQUES, Screen.READER_SERMONS)) {
             Box(
@@ -230,7 +241,7 @@ private fun StartScreen(onIndividual: () -> Unit, onMosque: () -> Unit) {
                 Spacer(Modifier.height(18.dp))
                 Text("Khutba", style = MaterialTheme.typography.displaySmall, color = Color.White)
                 Text(
-                    "Faithful translations. Reviewed by your mosque.",
+                    "Your mosque’s khutba, in English or Danish.",
                     style = MaterialTheme.typography.bodyLarge,
                     color = Color.White.copy(alpha = 0.82f),
                     textAlign = TextAlign.Center,
@@ -241,30 +252,26 @@ private fun StartScreen(onIndividual: () -> Unit, onMosque: () -> Unit) {
         item {
             Card(
                 modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(30.dp),
+                shape = RoundedCornerShape(24.dp),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
+                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
             ) {
                 Column(
                     Modifier.padding(horizontal = 20.dp, vertical = 24.dp),
                     verticalArrangement = Arrangement.spacedBy(14.dp),
                 ) {
-                    Text("How would you like to continue?", style = MaterialTheme.typography.headlineSmall)
-                    Text(
-                        "Readers can enter immediately. Mosque teams sign in to manage khutbas.",
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
                     StartRoleOption(
-                        title = "Individual",
-                        description = "Choose a mosque and read reviewed khutbas",
+                        title = "Read a khutba",
+                        description = "Choose your mosque. No account needed.",
                         icon = Icons.Default.Person,
                         onClick = onIndividual,
                     )
                     StartRoleOption(
-                        title = "Mosque",
-                        description = "Upload, review, publish, and remove khutbas",
+                        title = "Mosque sign in",
+                        description = "For mosque admins",
                         icon = Icons.Default.Home,
                         onClick = onMosque,
+                        primary = false,
                     )
                 }
             }
@@ -279,12 +286,15 @@ private fun StartRoleOption(
     icon: ImageVector,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    primary: Boolean = true,
 ) {
     Surface(
         modifier = modifier.clickable(onClick = onClick),
         shape = RoundedCornerShape(18.dp),
-        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.65f),
-        border = BorderStroke(1.5.dp, MaterialTheme.colorScheme.primary),
+        color = if (primary) MaterialTheme.colorScheme.primaryContainer
+            else MaterialTheme.colorScheme.surface,
+        border = BorderStroke(1.dp, if (primary) MaterialTheme.colorScheme.primary.copy(alpha = 0.25f)
+            else MaterialTheme.colorScheme.outlineVariant),
     ) {
         Row(
             Modifier.fillMaxWidth().padding(18.dp),
@@ -377,7 +387,7 @@ private fun MosqueRegisterScreen(
     var adminDisplayName by remember { mutableStateOf("") }
     var username by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
-    var permissionPassword by remember { mutableStateOf("") }
+    var contactEmail by remember { mutableStateOf("") }
     val usernameIsValid = username.trim().matches(Regex("[A-Za-z0-9._-]{3,64}"))
     val countryIsValid = country.trim().matches(Regex("[A-Za-z]{2}"))
     val formIsValid = mosqueName.trim().length >= 2 &&
@@ -386,7 +396,7 @@ private fun MosqueRegisterScreen(
         adminDisplayName.trim().length >= 2 &&
         usernameIsValid &&
         password.length >= 6 &&
-        permissionPassword.isNotEmpty()
+        android.util.Patterns.EMAIL_ADDRESS.matcher(contactEmail.trim()).matches()
 
     AppScaffold(title = "Create mosque profile", onBack = onBack) { padding ->
         LazyColumn(
@@ -397,7 +407,7 @@ private fun MosqueRegisterScreen(
             item {
                 SectionTitle(
                     "Set up your mosque workspace",
-                    "The permission password is required before the profile can be created.",
+                    "The app owner will review your request before you can sign in.",
                 )
             }
             item {
@@ -462,10 +472,9 @@ private fun MosqueRegisterScreen(
             }
             item {
                 OutlinedTextField(
-                    value = permissionPassword,
-                    onValueChange = { permissionPassword = it },
-                    label = { Text("Permission password") },
-                    visualTransformation = PasswordVisualTransformation(),
+                    value = contactEmail,
+                    onValueChange = { contactEmail = it },
+                    label = { Text("Contact email") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
@@ -480,7 +489,7 @@ private fun MosqueRegisterScreen(
                             adminDisplayName,
                             username,
                             password,
-                            permissionPassword,
+                            contactEmail.trim(),
                         )
                     },
                     enabled = formIsValid,
@@ -576,7 +585,10 @@ private fun SermonListScreen(
     offline: Boolean = false,
 ) {
     val today = LocalDate.now()
-    val sections = remember(sermons, today) { sermonDateSections(sermons, today) }
+    var language by rememberSaveable { mutableStateOf("all") }
+    val sections = remember(sermons, today, language) {
+        sermonDateSections(sermons.filter { language == "all" || it.targetLanguage == language }, today)
+    }
     val weekStart = today.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY))
     val weekEnd = weekStart.plusDays(6)
     AppScaffold(title = mosque?.name ?: "Sermons", onBack = onBack) { padding ->
@@ -587,6 +599,11 @@ private fun SermonListScreen(
         ) {
             if (offline) item { OfflineReaderNote() }
             item {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf("all" to "All", "en" to "English", "da" to "Dansk").forEach { (code, label) ->
+                        FilterChip(selected = language == code, onClick = { language = code }, label = { Text(label) })
+                    }
+                }
                 SectionTitle(
                     "This week's khutba",
                     "${shortDate(weekStart)} – ${shortDate(weekEnd)}",
@@ -645,12 +662,36 @@ private fun ReaderSermonScreen(
     preview: Boolean = false,
 ) {
     if (sermon == null) return
+    var liveState by remember(sermon.id) { mutableStateOf(com.khutba.app.model.LiveState()) }
+    var followLive by remember(sermon.id) { mutableStateOf(false) }
+    var scrollLive by remember(sermon.id) { mutableStateOf(true) }
+    var liveTarget by remember(sermon.id) { mutableStateOf<Pair<Int, Int>?>(null) }
+    LaunchedEffect(sermon.id, offline, preview, followLive) {
+        if (offline || preview) return@LaunchedEffect
+        while (true) {
+            try { liveState = viewModel.liveState(sermon.id) }
+            catch (e: kotlinx.coroutines.CancellationException) { throw e }
+            catch (_: Exception) { liveState = liveState.copy(status = "worker_offline") }
+            kotlinx.coroutines.delay(if (followLive) 2000 else 6000)
+        }
+    }
     var selectedCitation by remember(sermon.id) { mutableStateOf<Citation?>(null) }
     var selectedGlossaryTerm by remember(sermon.id) { mutableStateOf<GlossaryTerm?>(null) }
     var query by rememberSaveable(sermon.id) { mutableStateOf("") }
     var matchIndex by rememberSaveable(sermon.id) { mutableStateOf(0) }
     val savedPosition = remember(sermon.id) { if (preview) 0 to 0 else viewModel.readerPosition(sermon.id) }
     val listState = rememberLazyListState(savedPosition.first.coerceIn(0, sermon.segments.size), savedPosition.second.coerceAtLeast(0))
+    val liveDragging by listState.interactionSource.collectIsDraggedAsState()
+    LaunchedEffect(liveDragging) { if (liveDragging && followLive) scrollLive = false }
+    LaunchedEffect(liveTarget, followLive, scrollLive) {
+        if (followLive && scrollLive && liveState.active) liveTarget?.let { listState.animateScrollToItem(it.first, it.second) }
+    }
+    LaunchedEffect(liveState.highlights, followLive, scrollLive) {
+        if (followLive && scrollLive && liveState.active) {
+            val index = sermon.segments.indexOfFirst { it.id == liveState.highlights.firstOrNull()?.segment_id }
+            if (index >= 0 && listState.layoutInfo.visibleItemsInfo.none { it.index == index + 1 }) listState.animateScrollToItem(index + 1)
+        }
+    }
     val matches = remember(query, sermon.segments) {
         if (query.isBlank()) emptyList() else sermon.segments.mapIndexedNotNull { index, segment ->
             if (sanitizedReaderText(segment.translatedText.orEmpty()).contains(query.trim(), ignoreCase = true)) index else null
@@ -703,6 +744,18 @@ private fun ReaderSermonScreen(
                             style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary,
                         )
                         if (offline) OfflineReaderNote()
+                        if (!preview && !offline && liveState.active) {
+                            Text(when (liveState.status) {
+                                "matched" -> "Following the imam · approximate position"
+                                "paused" -> "Live session paused"
+                                "worker_offline" -> "Speech worker disconnected"
+                                else -> "Waiting for a clear match"
+                            })
+                            Row {
+                                OutlinedButton(onClick = { followLive = !followLive; scrollLive = true }) { Text(if (followLive) "Stop following" else "Follow imam") }
+                                if (followLive && !scrollLive) TextButton(onClick = { scrollLive = true }) { Text("Return to live") }
+                            }
+                        }
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text("Aa", fontSize = 16.sp)
                             Slider(value = textSize, onValueChange = viewModel::setReaderTextSize,
@@ -725,10 +778,15 @@ private fun ReaderSermonScreen(
                             color = MaterialTheme.colorScheme.primary)
                         TranslatedTextWithCitationIcons(
                             text = segment.translatedText.orEmpty(),
+                            liveHighlights = if (followLive && liveState.active) liveState.highlights.filter { it.segment_id == segment.id } else emptyList(),
+                            onLivePosition = { y -> liveTarget = (index + 1) to (y + 36) },
                             citations = segment.citations.filter { it.anchorValid && (it.sourceKind == "quran" || it.sourceKind == "hadith") },
                             glossaryTerms = segment.glossaryTerms,
                             onCitationClick = { selectedCitation = it },
-                            onGlossaryClick = { selectedGlossaryTerm = it },
+                            onGlossaryClick = { selectedGlossaryTerm = it.copy(
+                                popupPhrase = glossaryHeading(segment.translatedText.orEmpty(), it, sermon.targetLanguage),
+                                popupLanguage = sermon.targetLanguage,
+                            ) },
                             textSize = textSize, searchQuery = query.trim(),
                         )
                         segment.citations.filter { !it.anchorValid || citationInsertionPoint(sanitizedReaderText(segment.translatedText.orEmpty()), it) == null }.forEach { citation ->
@@ -865,6 +923,7 @@ private fun AdminHomeScreen(state: KhutbaUiState, viewModel: MainViewModel) {
 private fun AdminSettingsScreen(state: KhutbaUiState, viewModel: MainViewModel) {
     val mosque = state.adminMosque
     var mosqueName by remember(mosque?.name) { mutableStateOf(mosque?.name.orEmpty()) }
+    var mosqueCity by remember(mosque?.city) { mutableStateOf(mosque?.city.orEmpty()) }
     var currentPassword by remember { mutableStateOf("") }
     var newPassword by remember { mutableStateOf("") }
     var confirmPassword by remember { mutableStateOf("") }
@@ -874,7 +933,8 @@ private fun AdminSettingsScreen(state: KhutbaUiState, viewModel: MainViewModel) 
     val trimmedMosqueName = mosqueName.trim()
     val mosqueNameChanged = mosque != null &&
         trimmedMosqueName.length >= 2 &&
-        trimmedMosqueName != mosque.name
+        mosqueCity.trim().length >= 2 &&
+        (trimmedMosqueName != mosque.name || mosqueCity.trim() != mosque.city)
     val passwordsMatch = newPassword == confirmPassword
     val passwordIsValid = currentPassword.isNotEmpty() &&
         newPassword.length >= 6 &&
@@ -889,7 +949,7 @@ private fun AdminSettingsScreen(state: KhutbaUiState, viewModel: MainViewModel) 
             item {
                 SectionTitle(
                     "Mosque profile",
-                    "This name is shown to readers when they choose a mosque.",
+                    "Your name and city are shown to readers when they choose a mosque.",
                 )
             }
             item {
@@ -907,18 +967,14 @@ private fun AdminSettingsScreen(state: KhutbaUiState, viewModel: MainViewModel) 
                             singleLine = true,
                             modifier = Modifier.fillMaxWidth(),
                         )
-                        mosque?.let {
-                            Text(
-                                "${it.city}, ${it.country}",
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
+                        OutlinedTextField(value = mosqueCity, onValueChange = { mosqueCity = it },
+                            label = { Text("City") }, singleLine = true, modifier = Modifier.fillMaxWidth())
                         Button(
-                            onClick = { viewModel.updateMosqueName(trimmedMosqueName) },
+                            onClick = { viewModel.updateMosqueName(trimmedMosqueName, mosqueCity.trim()) },
                             enabled = mosqueNameChanged,
                             modifier = Modifier.fillMaxWidth().height(52.dp),
                         ) {
-                            Text("Save mosque name")
+                            Text("Save profile")
                         }
                     }
                 }
@@ -926,7 +982,7 @@ private fun AdminSettingsScreen(state: KhutbaUiState, viewModel: MainViewModel) 
             item {
                 SectionTitle(
                     "Mosque glossary",
-                    "Your entries override the built-in glossary for this mosque's future translations.",
+                    "New or edited entries need owner approval before they are used.",
                 )
             }
             item {
@@ -961,6 +1017,11 @@ private fun AdminSettingsScreen(state: KhutbaUiState, viewModel: MainViewModel) 
                                 verticalArrangement = Arrangement.spacedBy(4.dp),
                             ) {
                                 ArabicText(term.arabicTerm)
+                                Text(when(term.approvalStatus) {
+                                    "PENDING" -> "Awaiting approval"
+                                    "REJECTED" -> "Rejected — edit to resubmit"
+                                    else -> "Approved"
+                                }, style = MaterialTheme.typography.labelMedium)
                                 Text(
                                     term.literalTranslation,
                                     style = MaterialTheme.typography.titleSmall,
@@ -1136,7 +1197,7 @@ private fun GlossaryTermEditorDialog(
                     value = englishTranslation,
                     onValueChange = { englishTranslation = it },
                     label = { Text("Concise English translation") },
-                    supportingText = { Text("The complete phrase that should be highlighted") },
+                    supportingText = { Text("The English phrase shown at the top of the definition") },
                     modifier = Modifier.fillMaxWidth(),
                 )
                 OutlinedTextField(
@@ -1189,9 +1250,59 @@ private fun GlossaryTermEditorDialog(
 }
 
 @Composable
+private fun PostPublishDefinitionsScreen(state: KhutbaUiState, viewModel: MainViewModel) {
+    AppScaffold(title = "Optional definitions", onBack = viewModel::finishDefinitions) { padding ->
+        LazyColumn(
+            Modifier.fillMaxSize().padding(padding),
+            contentPadding = PaddingValues(16.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            item {
+                Text("Your khutba is published", style = MaterialTheme.typography.headlineSmall)
+                Text("These Arabic-marked terms do not have glossary entries. Add a contextual definition to share with all mosques, or skip this step. Quoted passages are excluded.")
+                TextButton(onClick = viewModel::finishDefinitions) { Text("Skip / Finish") }
+                TextButton(onClick = {
+                    state.definitionSermonId?.let(viewModel::openDefinitions)
+                }) { Text("Refresh missing terms") }
+                if (state.glossaryCandidates.isEmpty() && !state.loading) {
+                    Text("No missing terms loaded. You can finish, or refresh to check again.")
+                }
+            }
+            items(state.glossaryCandidates, key = { it.segmentId + it.arabicTerm }) { candidate ->
+                var phrase by rememberSaveable(candidate.segmentId, candidate.arabicTerm) { mutableStateOf("") }
+                var definition by rememberSaveable(candidate.segmentId, candidate.arabicTerm) { mutableStateOf("") }
+                Card(Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Text(candidate.arabicTerm, style = MaterialTheme.typography.titleLarge)
+                        SelectionContainer { Text(candidate.sentence) }
+                        OutlinedTextField(
+                            value = phrase, onValueChange = { phrase = it },
+                            label = { Text("English phrase for the definition") },
+                            supportingText = { Text("Copy the phrase immediately before the Arabic parentheses.") },
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        OutlinedTextField(
+                            value = definition, onValueChange = { definition = it },
+                            label = { Text("Definition in this context") }, minLines = 3,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        Button(
+                            enabled = !state.loading && phrase.isNotBlank() && definition.trim().length >= 3,
+                            onClick = { viewModel.saveDefinition(candidate, phrase, definition) },
+                        ) { Text("Add to global glossary") }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun AdminSermonScreen(state: KhutbaUiState, viewModel: MainViewModel) {
+    val liveUriHandler = LocalUriHandler.current
     var needsAttention by rememberSaveable(state.selectedSermon?.id) { mutableStateOf(false) }
     val sermon = state.selectedSermon
+    var editedTitle by rememberSaveable(sermon?.id, sermon?.title) { mutableStateOf(sermon?.title.orEmpty()) }
     AppScaffold(title = sermon?.title ?: "Review", onBack = viewModel::back) { padding ->
         if (sermon == null) return@AppScaffold
         val translating = state.translatingSermonId == sermon.id
@@ -1202,6 +1313,29 @@ private fun AdminSermonScreen(state: KhutbaUiState, viewModel: MainViewModel) {
         ) {
             item {
                 StatusBlock(sermon)
+                OutlinedTextField(
+                    value = editedTitle, onValueChange = { if (it.length <= 250) editedTitle = it },
+                    label = { Text("Khutba title") }, modifier = Modifier.fillMaxWidth(),
+                    enabled = !state.loading && sermon.status != "TRANSLATING",
+                )
+                TextButton(
+                    onClick = { viewModel.updateSermonTitle(sermon.id, editedTitle) },
+                    enabled = !state.loading && sermon.status != "TRANSLATING" &&
+                        editedTitle.isNotBlank() && editedTitle.trim() != sermon.title,
+                ) { Text("Save title") }
+                if (sermon.status == "PUBLISHED") {
+                    OutlinedButton(onClick = { liveUriHandler.openUri("https://khutba-reader.abdohelmy1995.chatgpt.site/#review/${sermon.id}") }, modifier = Modifier.fillMaxWidth()) { Text("Record imam live (web)") }
+                }
+                if (sermon.status == "PUBLISHED" && sermon.targetLanguage == "en") {
+                    if (sermon.targetLanguage == "en") {
+                        Button(onClick = { viewModel.createDanish(sermon.id) }, enabled = !state.loading) {
+                            Text("Danish translation")
+                        }
+                    }
+                    TextButton(onClick = { viewModel.openDefinitions(sermon.id) }) {
+                        Text("Add missing definitions")
+                    }
+                }
                 if (translating) {
                     Spacer(Modifier.height(12.dp))
                     TranslationProgressCard(
@@ -1376,8 +1510,54 @@ private fun ReviewSegmentCard(
     segment: SermonSegment,
     viewModel: MainViewModel,
 ) {
-    var translation by remember(segment.id, segment.translatedText) {
-        mutableStateOf(segment.translatedText.orEmpty())
+    var editor by remember(segment.id, segment.translatedText) {
+        mutableStateOf(TextFieldValue(segment.translatedText.orEmpty()))
+    }
+    val translation = editor.text
+    var links by remember(segment.id, segment.translatedText) { mutableStateOf(emptyList<SentenceAlignment>()) }
+    var requested by remember(segment.id, segment.translatedText) { mutableStateOf(false) }
+    var aligning by remember { mutableStateOf(false) }
+    var alignmentStatus by remember { mutableStateOf("") }
+    val scope = rememberCoroutineScope()
+    fun loadAlignment() {
+        if (aligning || translation.isBlank()) return
+        requested = true
+        aligning = true
+        val snapshot = translation
+        scope.launch {
+            try {
+                val result = viewModel.sentenceAlignment(sermonId, segment.id, snapshot)
+                links = moveAlignment(result, snapshot, editor.text)
+                alignmentStatus = if (result.isEmpty()) "No matching Arabic sentences found." else ""
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                alignmentStatus = "Arabic highlighting could not load. You can keep editing or retry."
+            } finally { aligning = false }
+        }
+    }
+    val selectedLinks = links.filter { link ->
+        val selection = editor.selection
+        if (selection.collapsed) selection.start >= link.translationStart &&
+            (selection.start < link.translationEnd || selection.start == translation.length && selection.start == link.translationEnd)
+        else link.translationStart < selection.max && link.translationEnd > selection.min
+    }
+    val highlightedArabic = buildAnnotatedString {
+        append(segment.arabicText)
+        selectedLinks.forEach { link ->
+            if (link.arabicStart >= 0 && link.arabicEnd <= length && link.arabicEnd > link.arabicStart) {
+                addStyle(SpanStyle(background = Color(0xFFF6DC8A), color = Color(0xFF29230E)), link.arabicStart, link.arabicEnd)
+            }
+        }
+    }
+    val arabicScroll = rememberScrollState()
+    var arabicLayout by remember { mutableStateOf<TextLayoutResult?>(null) }
+    LaunchedEffect(selectedLinks.firstOrNull()?.arabicStart, arabicLayout) {
+        val start = selectedLinks.firstOrNull()?.arabicStart
+        val layout = arabicLayout
+        if (start != null && layout != null && start in segment.arabicText.indices) {
+            arabicScroll.animateScrollTo(layout.getBoundingBox(start).top.toInt().coerceIn(0, arabicScroll.maxValue))
+        }
     }
     var note by remember(segment.id, segment.reviewerNote) {
         mutableStateOf(segment.reviewerNote.orEmpty())
@@ -1393,14 +1573,30 @@ private fun ReviewSegmentCard(
                 Spacer(Modifier.width(8.dp))
                 Text("Segment ${segment.ordinal + 1}", style = MaterialTheme.typography.titleMedium)
             }
-            ArabicText(segment.arabicText)
+            Text("Original Arabic", style = MaterialTheme.typography.titleSmall)
+            Text(highlightedArabic,
+                style = MaterialTheme.typography.bodyLarge.merge(TextStyle(textDirection = TextDirection.Rtl, textAlign = TextAlign.Right)),
+                onTextLayout = { arabicLayout = it },
+                modifier = Modifier.fillMaxWidth().heightIn(max = 240.dp).verticalScroll(arabicScroll))
+            segment.englishText?.let {
+                Text("Approved English", style = MaterialTheme.typography.titleSmall)
+                Text(it)
+            }
             OutlinedTextField(
-                value = translation,
-                onValueChange = { translation = it },
+                value = editor,
+                onValueChange = {
+                    links = moveAlignment(links, editor.text, it.text)
+                    editor = it
+                },
                 label = { Text("Translation") },
                 minLines = 4,
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier.fillMaxWidth().onFocusChanged { if (it.isFocused && !requested) loadAlignment() },
             )
+            if (requested) {
+                if (aligning) LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                Text(alignmentStatus.ifEmpty { if (selectedLinks.isEmpty()) "No Arabic match for this sentence" else "Matching Arabic highlighted" }, style = MaterialTheme.typography.bodySmall)
+                TextButton(onClick = { loadAlignment() }, enabled = !aligning) { Text("Refresh highlights") }
+            }
             if (segment.issues.isNotEmpty()) {
                 Text("Model/verifier warnings", color = MaterialTheme.colorScheme.error)
                 segment.issues.forEach { Text("• $it", style = MaterialTheme.typography.bodySmall) }
@@ -1512,17 +1708,25 @@ internal fun glossaryDisplayRange(text: String, term: GlossaryTerm): IntRange? {
     if (
         storedStart != null && storedEnd != null &&
         storedStart >= 0 && storedEnd in (storedStart + 1)..text.length &&
-        text.substring(storedStart, storedEnd).equals(term.displayTerm, ignoreCase = true)
+        text.substring(storedStart, storedEnd) == term.arabicTerm
     ) {
         return storedStart until storedEnd
     }
-    val phrase = term.displayTerm.trim()
+    val phrase = term.arabicTerm.trim()
     if (phrase.isEmpty()) return null
     val pattern = Regex(
-        "(?<![\\p{L}\\p{N}])${Regex.escape(phrase)}(?![\\p{L}\\p{N}])",
-        RegexOption.IGNORE_CASE,
+        "\\(\\s*(${Regex.escape(phrase)})\\s*\\)",
     )
-    return pattern.find(text)?.range
+    // Older cached/API responses anchor the English phrase. Follow only its
+    // immediately adjacent Arabic note, never highlight the English fallback.
+    if (storedEnd != null && storedEnd <= text.length) {
+        val note = pattern.find(text, storedEnd)
+        if (note != null && text.substring(storedEnd, note.range.first).isBlank()) {
+            return note.groups[1]?.range
+        }
+    }
+    val notes = pattern.findAll(text).take(2).toList()
+    return if (notes.size == 1) notes[0].groups[1]?.range else null
 }
 
 @Composable
@@ -1534,8 +1738,18 @@ private fun TranslatedTextWithCitationIcons(
     onGlossaryClick: (GlossaryTerm) -> Unit,
     textSize: Float = 18f,
     searchQuery: String = "",
+    liveHighlights: List<com.khutba.app.model.LiveHighlight> = emptyList(),
+    onLivePosition: ((Int) -> Unit)? = null,
 ) {
     val readerText = sanitizedReaderText(text)
+    fun cleanOffset(end: Int): Int = text.substring(0, end)
+        .replace(ReaderSourceMarkerRegex, "")
+        .replace(Regex("[ \\t]+([,.;:!?])"), "\$1")
+        .replace(Regex("[ \\t]{2,}"), " ").trimStart().length.coerceAtMost(readerText.length)
+    val liveRanges = liveHighlights.filter { it.start >= 0 && it.end > it.start && it.end <= text.length && text.substring(it.start,it.end) == it.excerpt }
+        .map { cleanOffset(it.start) until cleanOffset(it.end) }
+    val liveColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.8f)
+    var liveStart = -1
     val glossaryPositions = buildList {
         var occupiedUntil = 0
         glossaryTerms.mapNotNull { term ->
@@ -1583,6 +1797,17 @@ private fun TranslatedTextWithCitationIcons(
     val searchColor = MaterialTheme.colorScheme.secondaryContainer
     val annotated = buildAnnotatedString {
         var cursor = 0
+        fun appendSource(start: Int, end: Int) {
+            val before = length
+            append(readerText.substring(start, end))
+            liveRanges.forEach { range ->
+                val a = maxOf(start, range.first); val b = minOf(end, range.last + 1)
+                if (a < b) {
+                    if (liveStart < 0) liveStart = before + a - start
+                    addStyle(SpanStyle(background = liveColor), before + a - start, before + b - start)
+                }
+            }
+        }
         fun appendCitationsAt(position: Int) {
             citationsByPosition[position].orEmpty().forEach { item ->
                 append(" (${citationReference(item.citation)}) ")
@@ -1594,7 +1819,7 @@ private fun TranslatedTextWithCitationIcons(
             val glossary = glossaryByStart[cursor]
             if (glossary != null) {
                 val linkStart = length
-                append(readerText.substring(glossary.start, glossary.end))
+                appendSource(glossary.start, glossary.end)
                 addLink(
                     LinkAnnotation.Clickable(
                         tag = glossary.term.arabicTerm,
@@ -1609,7 +1834,7 @@ private fun TranslatedTextWithCitationIcons(
                 val nextGlossary = glossaryPositions.firstOrNull { it.start > cursor }?.start
                 val nextCitation = positioned.firstOrNull { it.position > cursor }?.position
                 val nextEvent = listOfNotNull(nextGlossary, nextCitation, readerText.length).min()
-                append(readerText.substring(cursor, nextEvent))
+                appendSource(cursor, nextEvent)
                 cursor = nextEvent
             }
         }
@@ -1641,6 +1866,7 @@ private fun TranslatedTextWithCitationIcons(
     Text(
         text = annotated,
         inlineContent = inlineContent,
+        onTextLayout = { layout -> if (liveStart >= 0 && liveStart < annotated.length) onLivePosition?.invoke(layout.getLineTop(layout.getLineForOffset(liveStart)).toInt()) },
         style = MaterialTheme.typography.bodyLarge.copy(fontSize = textSize.sp, lineHeight = (textSize * 1.65f).sp),
     )
 }
@@ -1677,11 +1903,17 @@ private fun ReaderGlossaryDialog(term: GlossaryTerm, onDismiss: () -> Unit) {
     ModalBottomSheet(onDismissRequest = onDismiss) {
         Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(24.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)) {
-            Text(term.displayTerm, style = MaterialTheme.typography.headlineSmall)
+            Text(term.popupPhrase.ifBlank { if (term.popupLanguage == "da") "Ordforklaring" else "Word meaning" },
+                style = MaterialTheme.typography.headlineSmall)
             ArabicText(term.arabicTerm)
+            if (term.transliteration.isNotBlank()) {
+                Text(term.transliteration, style = MaterialTheme.typography.bodyLarge)
+                Text("Letter transliteration · vowels may be incomplete",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
             HorizontalDivider()
             Text(term.meaning, style = MaterialTheme.typography.bodyLarge)
-            if (term.literalTranslation.isNotBlank()) Text("Literal wording: ${term.literalTranslation}")
             if (term.alternativeContextMeanings.isNotBlank()) {
                 Text("Other contexts", style = MaterialTheme.typography.titleMedium)
                 Text(term.alternativeContextMeanings)

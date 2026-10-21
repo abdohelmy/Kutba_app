@@ -37,6 +37,8 @@ struct RootView: View {
                     ReaderSermonView()
                 case .adminHome:
                     AdminHomeView()
+                case .adminDefinitions:
+                    PostPublishDefinitionsView()
                 case .adminSettings:
                     AdminSettingsView()
                 case .adminSermon:

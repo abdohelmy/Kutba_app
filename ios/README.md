@@ -16,3 +16,17 @@ FastAPI server; they must never be added to the Xcode project.
 
 The `KhutbaTests` target covers reader-text sanitization, citation labels, partial reader responses,
 and date-section grouping. Select **Product → Test** in Xcode to run it.
+
+## Latest Android parity updates
+
+- Simplified start screen: “Read a khutba” and “Mosque sign in”.
+- Arabic-only glossary links, including legacy cached English anchors when an
+  adjacent Arabic note exists. English text is never used as the link fallback.
+- Definition sheets show English, Arabic, letter transliteration, then meaning.
+  Unvocalized Arabic is labeled as potentially missing vowels.
+- Optional post-publish definitions screen, also available from a published
+  khutba via “Add missing definitions”. Entries are shared globally using the
+  existing backend; publishing remains successful if candidate loading fails.
+
+The backend is already deployed. This update needs a new iOS app build; it does
+not change or upload an App Store/TestFlight release automatically.

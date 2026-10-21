@@ -229,15 +229,15 @@ def test_glossary_term_is_returned_only_for_its_first_sermon_occurrence(client, 
     response = client.get(f"/api/v1/reader/sermons/{sermon_id}")
     assert response.status_code == 200
     segments = response.json()["segments"]
-    assert len(segments[0]["glossary_terms"]) == 1
-    term = segments[0]["glossary_terms"][0]
+    term = next(item for item in segments[0]["glossary_terms"] if item["arabic_term"] == "التقوى")
     assert term["arabic_term"] == "التقوى"
-    assert term["display_term"] == "God-consciousness"
+    assert term["display_term"] == "التقوى"
+    assert term["english_phrase"] == "God-consciousness"
     assert "awareness of Allah" in term["meaning"]
-    assert segments[1]["glossary_terms"] == []
+    assert not any(item["arabic_term"] == "التقوى" for item in segments[1]["glossary_terms"])
 
 
-def test_mosque_can_manage_a_term_that_overrides_the_builtin_glossary(client, seeded_accounts):
+def test_mosque_can_manage_a_term_that_overrides_the_builtin_glossary(client, seeded_accounts, owner_headers):
     from conftest import login_headers
 
     headers = login_headers(client, "admin", "correct-horse-123")
@@ -253,6 +253,8 @@ def test_mosque_can_manage_a_term_that_overrides_the_builtin_glossary(client, se
     )
     assert created.status_code == 201, created.text
     term_id = created.json()["id"]
+    assert created.json()["approval_status"] == "PENDING"
+    assert client.patch(f"/api/v1/owner/glossary/mosque/{term_id}", headers=owner_headers, json={"action":"approve"}).status_code == 200
     assert client.get("/api/v1/admin/glossary", headers=headers).json()[0]["id"] == term_id
 
     duplicate = client.post(
@@ -295,7 +297,8 @@ def test_mosque_can_manage_a_term_that_overrides_the_builtin_glossary(client, se
     glossary = public.json()["segments"][0]["glossary_terms"]
     assert len(glossary) == 1
     assert glossary[0]["meaning"].startswith("Beneficial knowledge")
-    assert glossary[0]["display_term"] == "Sacred learning"
+    assert glossary[0]["display_term"] == "العلم"
+    assert glossary[0]["english_phrase"] == "Sacred learning"
 
     updated = client.put(
         f"/api/v1/admin/glossary/{term_id}",

@@ -1,6 +1,7 @@
 import asyncio
 from types import SimpleNamespace
 
+import httpx
 import pytest
 
 from app.services.canonical_sources import CanonicalRetrieval
@@ -24,6 +25,15 @@ def _candidate(url: str = "https://sunnah.com/bukhari:1") -> SunnahWebCandidate:
         url=url,
         grade="Sahih",
     )
+
+
+@pytest.fixture
+def confirmed_pages(monkeypatch):
+    """These tests exercise ranking; page evidence itself has separate transport tests."""
+    async def confirmed(source, client):
+        return None
+
+    monkeypatch.setattr("app.services.translation.verify_sunnah_source", confirmed)
 
 
 def test_sunnah_web_candidate_requires_matching_arabic_and_domain():
@@ -130,7 +140,7 @@ async def test_openai_sunnah_search_is_restricted_to_sunnah_dot_com():
 
 
 @pytest.mark.asyncio
-async def test_sunnah_fallback_checks_every_unsourced_bounded_passage():
+async def test_sunnah_fallback_checks_every_unsourced_bounded_passage(confirmed_pages):
     existing = RetrievedSource(
         chunk_id="canonical:sunnah:bukhari:1",
         source_id="sunnah.com:bukhari:1",
@@ -205,7 +215,7 @@ async def test_sunnah_fallback_limits_concurrency_and_shortens_long_queries():
 
 
 @pytest.mark.asyncio
-async def test_sunnah_fallback_prefers_requested_collections_for_equal_matches():
+async def test_sunnah_fallback_prefers_requested_collections_for_equal_matches(confirmed_pages):
     class FakeProvider:
         async def search_sunnah(self, passage):
             return SunnahWebSearchResult(
@@ -288,3 +298,26 @@ async def test_source_classification_runs_hadith_search_before_quran_lookup():
 
     assert order == ["hadith", "sunnah", "quran"]
     assert result == CanonicalRetrieval([], [])
+
+
+@pytest.mark.asyncio
+async def test_fallback_rejects_model_text_missing_from_evidence_page():
+    class FakeProvider:
+        async def search_sunnah(self, passage):
+            return SunnahWebSearchResult(candidates=[_candidate()])
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(
+        lambda request: httpx.Response(200, text="<p>إنما الأعمال بالنيات</p><p>Wrong English.</p>")
+    )) as client:
+        sources, issues = await _sunnah_web_fallback(
+            FakeProvider(), "«إنما الأعمال بالنيات»", [], http_client=client
+        )
+    assert not sources
+    assert "did not confirm both Arabic and English" in issues[0]
+
+
+def test_direct_hadith_number_cannot_conflict_with_returned_page():
+    candidate = _candidate().model_copy(update={"hadith_number": "999999"})
+    assert _validated_sunnah_source(
+        candidate, "إنما الأعمال بالنيات", "إنما الأعمال بالنيات"
+    ) is None

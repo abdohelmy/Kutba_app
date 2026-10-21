@@ -57,12 +57,14 @@ final class APIClient {
     }
 
     func registerMosque(_ request: MosqueRegistrationRequest) async throws -> User {
-        let _: User = try await send(path: "auth/register-mosque", method: "POST", body: request)
-        return try await login(username: request.username, password: request.password)
+        return try await send(path: "auth/register-mosque", method: "POST", body: request)
     }
 
     func mosques() async throws -> [Mosque] {
         try await send(path: "reader/mosques")
+    }
+    func liveState(sermonID: String) async throws -> LiveState {
+        try await send(path: "reader/sermons/\(sermonID)/live")
     }
 
     func publishedSermons(mosqueID: String, language: String?) async throws -> [SermonSummary] {
@@ -102,11 +104,11 @@ final class APIClient {
         try await authorized(path: "admin/profile")
     }
 
-    func updateMosqueName(_ name: String) async throws -> Mosque {
+    func updateMosqueName(_ name: String, city: String) async throws -> Mosque {
         try await authorized(
             path: "admin/profile",
             method: "PATCH",
-            body: MosqueProfileUpdateRequest(mosqueName: name.trimmingCharacters(in: .whitespacesAndNewlines))
+            body: MosqueProfileUpdateRequest(mosqueName: name.trimmingCharacters(in: .whitespacesAndNewlines), city: city.trimmingCharacters(in: .whitespacesAndNewlines))
         )
     }
 
@@ -135,6 +137,10 @@ final class APIClient {
 
     func adminSermon(id: String) async throws -> SermonDetail {
         try await authorized(path: "admin/sermons/\(id)")
+    }
+
+    func updateSermonTitle(id: String, title: String) async throws -> SermonSummary {
+        try await authorized(path: "admin/sermons/\(id)/title", method: "PATCH", body: ["title": title])
     }
 
     func previewSermon(id: String) async throws -> SermonDetail {
@@ -205,6 +211,17 @@ final class APIClient {
         try await authorized(path: "admin/sermons/\(sermonID)/translate", method: "POST")
     }
 
+    func createDanish(sermonID: String) async throws -> SermonSummary {
+        try await authorized(path: "admin/sermons/\(sermonID)/danish", method: "POST")
+    }
+
+    func sentenceAlignment(sermonID: String, segmentID: String, text: String) async throws -> [SentenceAlignment] {
+        try await authorized(
+            path: "admin/sermons/\(sermonID)/segments/\(segmentID)/alignment",
+            method: "POST", body: ["translated_text": text]
+        )
+    }
+
     func reviewSegment(
         sermonID: String,
         segmentID: String,
@@ -227,6 +244,16 @@ final class APIClient {
         let _: TranslationQueued = try await authorized(
             path: "admin/sermons/\(sermonID)/publish",
             method: "POST"
+        )
+    }
+
+    func glossaryCandidates(sermonID: String) async throws -> [GlossaryCandidate] {
+        try await authorized(path: "admin/sermons/\(sermonID)/glossary-candidates")
+    }
+
+    func contributeGlossary(sermonID: String, request: GlossaryContribution) async throws {
+        let _: GlossarySavedResponse = try await authorized(
+            path: "admin/sermons/\(sermonID)/glossary-contributions", method: "POST", body: request
         )
     }
 

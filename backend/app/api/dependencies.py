@@ -26,6 +26,14 @@ def get_current_user(
     user = db.get(User, user_id) if user_id else None
     if user is None or not user.is_active:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "User is inactive or missing")
+    if payload.get("auth_version", 0) != user.auth_version:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Please sign in again")
+    if user.role == UserRole.MOSQUE_ADMIN and (
+        not user.mosque or not user.mosque.is_active or user.mosque.approval_status != "APPROVED"
+    ):
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN, "Mosque account is awaiting approval or suspended"
+        )
     return user
 
 

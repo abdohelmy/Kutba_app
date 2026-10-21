@@ -12,6 +12,8 @@ import com.khutba.app.data.KhutbaRepository
 import com.khutba.app.data.ReaderStore
 import com.khutba.app.data.userMessage
 import com.khutba.app.model.Mosque
+import com.khutba.app.model.GlossaryCandidate
+import com.khutba.app.model.GlossaryContribution
 import com.khutba.app.model.MosqueGlossaryTerm
 import com.khutba.app.model.SermonDetail
 import com.khutba.app.model.SermonSummary
@@ -38,9 +40,12 @@ enum class Screen {
     ADMIN_SETTINGS,
     ADMIN_SERMON,
     ADMIN_PREVIEW,
+    ADMIN_DEFINITIONS,
 }
 
 data class KhutbaUiState(
+    val definitionSermonId: String? = null,
+    val glossaryCandidates: List<GlossaryCandidate> = emptyList(),
     val screen: Screen = Screen.START,
     val loading: Boolean = false,
     val translatingSermonId: String? = null,
@@ -63,6 +68,8 @@ data class KhutbaUiState(
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val repository = KhutbaRepository()
+    suspend fun sentenceAlignment(sermonId: String, segmentId: String, text: String) =
+        repository.sentenceAlignment(sermonId, segmentId, text)
     private val readerStore = ReaderStore(application)
     private var translationJob: Job? = null
     private var translationMonitor = 0
@@ -94,6 +101,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun login(username: String, password: String) = launchAction {
         val user = repository.login(username, password, "MOSQUE")
+        if (user.role == "SUPER_ADMIN") {
+            repository.logout()
+            error("Use the web app for the owner dashboard: khutba-reader.abdohelmy1995.chatgpt.site")
+        }
         val isMosqueAccount = user.role == "MOSQUE_ADMIN" || user.role == "SUPER_ADMIN"
         if (!isMosqueAccount) {
             repository.logout()
@@ -110,19 +121,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         adminDisplayName: String,
         username: String,
         password: String,
-        permissionPassword: String,
+        contactEmail: String,
     ) = launchAction {
-        val user = repository.registerMosque(
+        repository.registerMosque(
             mosqueName,
             city,
             country,
             adminDisplayName,
             username,
             password,
-            permissionPassword,
+            contactEmail,
         )
-        mutableState.value = mutableState.value.copy(user = user)
-        refreshAdminHome()
+        mutableState.value = mutableState.value.copy(screen = Screen.MOSQUE_LOGIN)
+        Toast.makeText(getApplication(), "Request submitted. Sign in after your mosque is approved.", Toast.LENGTH_LONG).show()
     }
 
     fun logout() {
@@ -130,6 +141,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         repository.logout()
         mutableState.value = KhutbaUiState()
     }
+    suspend fun liveState(sermonId: String) = repository.liveState(sermonId)
 
     fun openAdminSettings() = launchAction {
         mutableState.value = mutableState.value.copy(
@@ -138,11 +150,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         )
     }
 
-    fun updateMosqueName(mosqueName: String) = launchAction {
-        val mosque = repository.updateMosqueName(mosqueName)
+    fun updateMosqueName(mosqueName: String, city: String) = launchAction {
+        val mosque = repository.updateMosqueName(mosqueName, city)
         mutableState.value = mutableState.value.copy(
             adminMosque = mosque,
-            notice = "Mosque name updated",
+            notice = "Mosque profile updated",
         )
     }
 
@@ -169,7 +181,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         )
         mutableState.value = mutableState.value.copy(
             adminGlossary = repository.adminGlossary(),
-            notice = if (glossaryTermId == null) "Glossary term added" else "Glossary term updated",
+            notice = "Glossary submitted for owner approval",
         )
     }
 
@@ -267,7 +279,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val application = getApplication<Application>()
             val request = DownloadManager.Request(repository.publishedSermonPdfUrl(sermon.id))
                 .setTitle(sermon.title)
-                .setDescription("Downloading the reviewed English khutba")
+                .setDescription("Downloading the reviewed khutba translation")
                 .setMimeType("application/pdf")
                 .setAllowedOverMetered(true)
                 .setAllowedOverRoaming(true)
@@ -325,6 +337,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun translate(sermonId: String) = trackTranslation(sermonId, true)
+
+    fun updateSermonTitle(sermonId: String, title: String) = launchAction {
+        repository.updateSermonTitle(sermonId, title)
+        mutableState.value = mutableState.value.copy(
+            selectedSermon = repository.adminSermon(sermonId), notice = "Title updated.",
+        )
+    }
+
+    fun createDanish(sermonId: String) = launchAction {
+        val child = repository.createDanish(sermonId)
+        openAdminSermon(child.id)
+    }
 
     private fun trackTranslation(sermonId: String, start: Boolean) {
         if (translationJob?.isActive == true && mutableState.value.translatingSermonId == sermonId) return
@@ -413,8 +437,50 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun publish(sermonId: String) = launchAction {
         repository.publish(sermonId)
-        refreshAdminHome()
+        if (mutableState.value.selectedSermon?.targetLanguage == "da") {
+            refreshAdminHome()
+            return@launchAction
+        }
+        mutableState.value = mutableState.value.copy(
+            screen = Screen.ADMIN_DEFINITIONS, definitionSermonId = sermonId,
+            glossaryCandidates = emptyList(),
+        )
+        loadDefinitionCandidates(sermonId)
     }
+
+    private suspend fun loadDefinitionCandidates(sermonId: String) {
+        try {
+            mutableState.value = mutableState.value.copy(
+                glossaryCandidates = repository.glossaryCandidates(sermonId),
+            )
+        } catch (error: Exception) {
+            if (error is CancellationException) throw error
+            mutableState.value = mutableState.value.copy(
+                error = "Your khutba is published. Definitions could not be loaded. You can retry or skip.",
+            )
+        }
+    }
+
+    fun openDefinitions(sermonId: String) = launchAction {
+        mutableState.value = mutableState.value.copy(
+            screen = Screen.ADMIN_DEFINITIONS, definitionSermonId = sermonId,
+            glossaryCandidates = emptyList(),
+        )
+        loadDefinitionCandidates(sermonId)
+    }
+
+    fun saveDefinition(candidate: GlossaryCandidate, phrase: String, meaning: String) = launchAction {
+        val sermonId = mutableState.value.definitionSermonId ?: return@launchAction
+        repository.contributeGlossary(sermonId, GlossaryContribution(
+            candidate.segmentId, candidate.arabicTerm, phrase.trim(), meaning.trim(),
+        ))
+        mutableState.value = mutableState.value.copy(
+            glossaryCandidates = mutableState.value.glossaryCandidates.filter { it != candidate },
+            notice = "Definition submitted for owner approval.",
+        )
+    }
+
+    fun finishDefinitions() = launchAction { refreshAdminHome() }
 
     fun deleteSermon(sermonId: String) = launchAction {
         repository.deleteAdminSermon(sermonId)
@@ -431,6 +497,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun back() {
+        if (mutableState.value.screen == Screen.ADMIN_DEFINITIONS) {
+            finishDefinitions()
+            return
+        }
         val state = mutableState.value
         mutableState.value = state.copy(
             screen = when (state.screen) {
@@ -442,6 +512,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 Screen.ADMIN_SERMON -> Screen.ADMIN_HOME
                 Screen.ADMIN_SETTINGS -> Screen.ADMIN_HOME
                 Screen.ADMIN_PREVIEW -> Screen.ADMIN_SERMON
+                Screen.ADMIN_DEFINITIONS -> Screen.ADMIN_HOME
                 else -> state.screen
             },
             error = null,

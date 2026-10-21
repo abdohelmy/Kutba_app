@@ -3,6 +3,7 @@ from abc import ABC, abstractmethod
 from pydantic import BaseModel, Field
 
 from app.services.glossary import GlossaryEntry
+from app.services.glossary_phrases import GlossaryPhrase
 from app.services.retrieval import RetrievedSource
 
 
@@ -16,6 +17,7 @@ class TranslationDraft(BaseModel):
     suggested_title: str | None = Field(default=None, max_length=250)
     citations: list[str] = Field(default_factory=list)
     uncertain_terms: list[str] = Field(default_factory=list)
+    glossary_phrases: list[GlossaryPhrase] = Field(default_factory=list)
     source_transliterations: list[SourceTransliteration] = Field(default_factory=list)
 
 
@@ -24,6 +26,7 @@ class VerificationResult(BaseModel):
     corrected_translation: str | None = None
     issues: list[str] = Field(default_factory=list)
     uncertain_terms: list[str] = Field(default_factory=list)
+    glossary_phrases: list[GlossaryPhrase] = Field(default_factory=list)
     source_transliterations: list[SourceTransliteration] = Field(default_factory=list)
 
 
@@ -51,6 +54,12 @@ class SunnahWebSearchResult(BaseModel):
 class TranslationProvider(ABC):
     name: str
     model_name: str
+
+    async def localize_danish(self, payload: dict):
+        raise RuntimeError("Danish translation is not supported by this provider")
+
+    async def align_sentences(self, payload: dict):
+        raise RuntimeError("Sentence highlighting is unavailable for this provider")
 
     @abstractmethod
     async def translate(

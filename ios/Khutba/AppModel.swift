@@ -14,6 +14,7 @@ final class AppModel: ObservableObject {
         case adminSettings
         case adminSermon
         case adminPreview
+        case adminDefinitions
     }
 
     @Published var screen: Screen = .start
@@ -23,6 +24,8 @@ final class AppModel: ObservableObject {
     @Published var user: User?
     @Published var adminMosque: Mosque?
     @Published var adminGlossary: [MosqueGlossaryTerm] = []
+    @Published var definitionSermonID: String?
+    @Published var glossaryCandidates: [GlossaryCandidate] = []
     @Published var mosques: [Mosque] = []
     @Published var selectedMosque: Mosque?
     @Published var sermons: [SermonSummary] = []
@@ -36,6 +39,9 @@ final class AppModel: ObservableObject {
     @Published var translationReconnecting = false
 
     private let api: APIClient
+    func sentenceAlignment(sermonID: String, segmentID: String, text: String) async throws -> [SentenceAlignment] {
+        try await api.sentenceAlignment(sermonID: sermonID, segmentID: segmentID, text: text)
+    }
     private let readerCache = ReaderCache()
     private var translationTask: Task<Void, Never>?
     private var translationMonitorID = UUID()
@@ -72,6 +78,10 @@ final class AppModel: ObservableObject {
     func login(username: String, password: String) {
         perform {
             let user = try await self.api.login(username: username, password: password)
+            if user.role == "SUPER_ADMIN" {
+                self.api.logout()
+                throw APIError.http(status: 403, detail: "Use the web app for the owner dashboard: khutba-reader.abdohelmy1995.chatgpt.site")
+            }
             guard user.role == "MOSQUE_ADMIN" || user.role == "SUPER_ADMIN" else {
                 self.api.logout()
                 throw APIError.http(
@@ -91,10 +101,10 @@ final class AppModel: ObservableObject {
         adminName: String,
         username: String,
         password: String,
-        permissionPassword: String
+        contactEmail: String
     ) {
         perform {
-            self.user = try await self.api.registerMosque(
+            let _ = try await self.api.registerMosque(
                 MosqueRegistrationRequest(
                     mosqueName: mosqueName.trimmingCharacters(in: .whitespacesAndNewlines),
                     city: city.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -102,10 +112,11 @@ final class AppModel: ObservableObject {
                     adminDisplayName: adminName.trimmingCharacters(in: .whitespacesAndNewlines),
                     username: username.trimmingCharacters(in: .whitespacesAndNewlines),
                     password: password,
-                    permissionPassword: permissionPassword
+                    contactEmail: contactEmail.trimmingCharacters(in: .whitespacesAndNewlines)
                 )
             )
-            try await self.refreshAdminHome()
+            self.screen = .mosqueLogin
+            self.noticeMessage = "Request submitted. Sign in after your mosque is approved."
         }
     }
 
@@ -201,10 +212,10 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func updateMosqueName(_ name: String) {
+    func updateMosqueName(_ name: String, city: String) {
         perform {
-            self.adminMosque = try await self.api.updateMosqueName(name)
-            self.noticeMessage = "Mosque name updated"
+            self.adminMosque = try await self.api.updateMosqueName(name, city: city)
+            self.noticeMessage = "Mosque profile updated"
         }
     }
 
@@ -233,7 +244,7 @@ final class AppModel: ObservableObject {
             )
             let _: MosqueGlossaryTerm = try await self.api.saveGlossaryTerm(id: id, request: request)
             self.adminGlossary = try await self.api.glossary()
-            self.noticeMessage = id == nil ? "Glossary term added" : "Glossary term updated"
+            self.noticeMessage = "Glossary submitted for owner approval"
         }
     }
 
@@ -265,6 +276,25 @@ final class AppModel: ObservableObject {
             if self.selectedSermon?.status == SermonStatus.translating {
                 self.trackTranslation(sermonID: id, start: false)
             }
+        }
+    }
+
+    func createDanish(sermonID: String) {
+        perform {
+            let child = try await self.api.createDanish(sermonID: sermonID)
+            self.selectedSermon = try await self.api.adminSermon(id: child.id)
+            self.screen = .adminSermon
+            if self.selectedSermon?.status == SermonStatus.translating {
+                self.trackTranslation(sermonID: child.id, start: false)
+            }
+        }
+    }
+
+    func updateSermonTitle(sermonID: String, title: String) {
+        perform {
+            let _ = try await self.api.updateSermonTitle(id: sermonID, title: title.trimmingCharacters(in: .whitespacesAndNewlines))
+            self.selectedSermon = try await self.api.adminSermon(id: sermonID)
+            self.noticeMessage = "Title updated."
         }
     }
 
@@ -377,8 +407,49 @@ final class AppModel: ObservableObject {
     func publish(sermonID: String) {
         perform {
             try await self.api.publish(sermonID: sermonID)
-            try await self.refreshAdminHome()
+            if self.selectedSermon?.targetLanguage == "da" {
+                try await self.refreshAdminHome()
+                return
+            }
+            self.definitionSermonID = sermonID
+            self.glossaryCandidates = []
+            self.screen = .adminDefinitions
+            await self.loadDefinitions(sermonID: sermonID)
         }
+    }
+
+    private func loadDefinitions(sermonID: String) async {
+        do {
+            glossaryCandidates = try await api.glossaryCandidates(sermonID: sermonID)
+        } catch {
+            errorMessage = "Your khutba is published. Definitions could not be loaded. You can refresh or skip."
+        }
+    }
+
+    func openDefinitions(sermonID: String) {
+        perform {
+            self.definitionSermonID = sermonID
+            self.glossaryCandidates = []
+            self.screen = .adminDefinitions
+            await self.loadDefinitions(sermonID: sermonID)
+        }
+    }
+
+    func saveDefinition(_ candidate: GlossaryCandidate, phrase: String, meaning: String) {
+        perform {
+            guard let id = self.definitionSermonID else { return }
+            try await self.api.contributeGlossary(sermonID: id, request: GlossaryContribution(
+                segmentId: candidate.segmentId, arabicTerm: candidate.arabicTerm,
+                literalTranslation: phrase.trimmingCharacters(in: .whitespacesAndNewlines),
+                meaning: meaning.trimmingCharacters(in: .whitespacesAndNewlines)
+            ))
+            self.glossaryCandidates.removeAll { $0.id == candidate.id }
+            self.noticeMessage = "Definition submitted for owner approval."
+        }
+    }
+
+    func finishDefinitions() {
+        perform { try await self.refreshAdminHome() }
     }
 
     func back() {
@@ -400,6 +471,8 @@ final class AppModel: ObservableObject {
             screen = .adminHome
         case .adminPreview:
             screen = .adminSermon
+        case .adminDefinitions:
+            finishDefinitions()
         case .start:
             break
         }

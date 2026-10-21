@@ -1,5 +1,8 @@
 package com.khutba.app.data
 
+import com.khutba.app.model.GlossaryCandidate
+import com.khutba.app.model.GlossaryContribution
+
 import com.khutba.app.BuildConfig
 import com.khutba.app.model.LoginRequest
 import com.khutba.app.model.Mosque
@@ -36,6 +39,16 @@ import retrofit2.http.PUT
 import okhttp3.MediaType.Companion.toMediaType
 
 interface KhutbaApi {
+    @GET("reader/sermons/{sermonId}/live")
+    suspend fun liveState(@Path("sermonId") sermonId: String): com.khutba.app.model.LiveState
+    @POST("admin/sermons/{sermonId}/segments/{segmentId}/alignment")
+    suspend fun sentenceAlignment(
+        @Header("Authorization") authorization: String,
+        @Path("sermonId") sermonId: String,
+        @Path("segmentId") segmentId: String,
+        @Body request: Map<String, String>,
+    ): List<com.khutba.app.model.SentenceAlignment>
+
     @POST("auth/login")
     suspend fun login(@Body request: LoginRequest): TokenResponse
 
@@ -64,6 +77,19 @@ interface KhutbaApi {
 
     @GET("admin/sermons")
     suspend fun adminSermons(@Header("Authorization") authorization: String): List<SermonSummary>
+
+    @PATCH("admin/sermons/{sermonId}/title")
+    suspend fun updateSermonTitle(
+        @Header("Authorization") authorization: String,
+        @Path("sermonId") sermonId: String,
+        @Body request: Map<String, String>,
+    ): SermonSummary
+
+    @POST("admin/sermons/{sermonId}/danish")
+    suspend fun createDanish(
+        @Header("Authorization") authorization: String,
+        @Path("sermonId") sermonId: String,
+    ): SermonSummary
 
     @GET("admin/profile")
     suspend fun adminProfile(@Header("Authorization") authorization: String): Mosque
@@ -164,6 +190,19 @@ interface KhutbaApi {
         @Path("segmentId") segmentId: String,
         @Body request: SegmentReviewRequest,
     ): SermonSegment
+
+    @GET("admin/sermons/{sermonId}/glossary-candidates")
+    suspend fun glossaryCandidates(
+        @Header("Authorization") authorization: String,
+        @Path("sermonId") sermonId: String,
+    ): List<GlossaryCandidate>
+
+    @POST("admin/sermons/{sermonId}/glossary-contributions")
+    suspend fun contributeGlossary(
+        @Header("Authorization") authorization: String,
+        @Path("sermonId") sermonId: String,
+        @Body request: GlossaryContribution,
+    )
 
     @POST("admin/sermons/{sermonId}/publish")
     suspend fun publish(

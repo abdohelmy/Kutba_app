@@ -31,7 +31,7 @@ def test_published_reader_routes_allow_guest_access(client):
     assert response.status_code == 200
 
 
-def test_mosque_registration_requires_permission_password(client):
+def test_mosque_registration_ignores_legacy_permission_password_and_waits_for_approval(client):
     payload = {
         "mosque_name": "New Community Mosque",
         "city": "Odense",
@@ -42,12 +42,11 @@ def test_mosque_registration_requires_permission_password(client):
         "permission_password": "wrong-password",
     }
     rejected = client.post("/api/v1/auth/register-mosque", json=payload)
-    assert rejected.status_code == 403
-    assert rejected.json()["detail"] == "Invalid mosque permission password"
+    assert rejected.status_code == 201
     assert client.get("/api/v1/reader/mosques").json() == []
 
 
-def test_mosque_can_register_with_permission_password_and_login(client):
+def test_legacy_permission_password_does_not_bypass_approval(client):
     register = client.post(
         "/api/v1/auth/register-mosque",
         json={
@@ -73,16 +72,9 @@ def test_mosque_can_register_with_permission_password_and_login(client):
             "account_type": "MOSQUE",
         },
     )
-    assert login.status_code == 200
+    assert login.status_code == 403
     mosques = client.get("/api/v1/reader/mosques").json()
-    assert mosques == [
-        {
-            "id": created["mosque_id"],
-            "name": "New Community Mosque",
-            "city": "Odense",
-            "country": "DK",
-        }
-    ]
+    assert mosques == []
 
 
 def test_username_can_exist_once_per_login_type_and_password_minimum_is_six(

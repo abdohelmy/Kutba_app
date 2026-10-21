@@ -48,6 +48,7 @@ class Mosque(Base, IdMixin, TimestampMixin):
     city: Mapped[str] = mapped_column(String(120), index=True)
     country: Mapped[str] = mapped_column(String(2), default="DK")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    approval_status: Mapped[str] = mapped_column(String(24), default="APPROVED")
 
 
 class MosqueGlossaryTerm(Base, IdMixin, TimestampMixin):
@@ -63,6 +64,18 @@ class MosqueGlossaryTerm(Base, IdMixin, TimestampMixin):
     literal_translation: Mapped[str] = mapped_column(String(500))
     arabic_variations: Mapped[str] = mapped_column(Text, default="")
     alternative_context_meanings: Mapped[str] = mapped_column(Text, default="")
+    approval_status: Mapped[str] = mapped_column(String(24), default="APPROVED")
+
+
+class GlobalGlossaryTerm(Base, IdMixin, TimestampMixin):
+    __tablename__ = "global_glossary_terms"
+
+    normalized_term: Mapped[str] = mapped_column(String(250), unique=True)
+    arabic_term: Mapped[str] = mapped_column(String(250))
+    meaning: Mapped[str] = mapped_column(Text)
+    literal_translation: Mapped[str] = mapped_column(String(500))
+    created_by: Mapped[str] = mapped_column(ForeignKey("users.id"))
+    approval_status: Mapped[str] = mapped_column(String(24), default="APPROVED")
 
 
 class User(Base, IdMixin, TimestampMixin):
@@ -80,12 +93,42 @@ class User(Base, IdMixin, TimestampMixin):
     role: Mapped[UserRole] = mapped_column(String(32), default=UserRole.READER)
     mosque_id: Mapped[str | None] = mapped_column(ForeignKey("mosques.id"), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    contact_email: Mapped[str | None] = mapped_column(String(254), nullable=True)
+    auth_version: Mapped[int] = mapped_column(Integer, default=0)
 
     mosque: Mapped[Mosque | None] = relationship()
 
 
+class AdminAudit(Base, IdMixin, TimestampMixin):
+    __tablename__ = "admin_audit"
+    actor_id: Mapped[str] = mapped_column(String(36), index=True)
+    action: Mapped[str] = mapped_column(String(200))
+    target_id: Mapped[str] = mapped_column(String(200))
+    details: Mapped[str] = mapped_column(Text, default="")
+
+
+class PasswordReset(Base, IdMixin, TimestampMixin):
+    __tablename__ = "password_resets"
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime)
+    used: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
+class LiveWorkerToken(Base, IdMixin, TimestampMixin):
+    __tablename__ = "live_worker_tokens"
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_by: Mapped[str] = mapped_column(ForeignKey("users.id"))
+
+
 class Sermon(Base, IdMixin, TimestampMixin):
     __tablename__ = "sermons"
+    __table_args__ = (UniqueConstraint("english_sermon_id", "target_language"),)
+
+    english_sermon_id: Mapped[str | None] = mapped_column(ForeignKey("sermons.id"), nullable=True)
+    english_revision: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     mosque_id: Mapped[str] = mapped_column(ForeignKey("mosques.id"), index=True)
     title: Mapped[str] = mapped_column(String(250))
@@ -124,6 +167,9 @@ class SermonSegment(Base, IdMixin, TimestampMixin):
     issues: Mapped[list[str]] = mapped_column(JSON, default=list)
     citations: Mapped[list[dict[str, str]]] = mapped_column(JSON, default=list)
     reviewer_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Exact per-occurrence popup phrases; Danish also includes localized definitions.
+    localized_glossary: Mapped[list[dict]] = mapped_column(JSON, default=list)
+    live_alignment: Mapped[dict] = mapped_column(JSON, default=dict)
     reviewed_by: Mapped[str | None] = mapped_column(ForeignKey("users.id"), nullable=True)
 
     sermon: Mapped[Sermon] = relationship(back_populates="segments")

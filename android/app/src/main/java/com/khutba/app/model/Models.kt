@@ -4,6 +4,13 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
 @Serializable
+data class LiveHighlight(val segment_id: String, val start: Int, val end: Int, val excerpt: String = "")
+
+@Serializable
+data class LiveState(val active: Boolean = false, val status: String = "idle",
+                     val sequence: Int = -1, val highlights: List<LiveHighlight> = emptyList())
+
+@Serializable
 data class LoginRequest(
     val username: String,
     val password: String,
@@ -25,12 +32,13 @@ data class MosqueRegisterRequest(
     @SerialName("admin_display_name") val adminDisplayName: String,
     val username: String,
     val password: String,
-    @SerialName("permission_password") val permissionPassword: String,
+    @SerialName("contact_email") val contactEmail: String,
 )
 
 @Serializable
 data class MosqueProfileUpdateRequest(
     @SerialName("mosque_name") val mosqueName: String,
+    val city: String? = null,
 )
 
 @Serializable
@@ -58,10 +66,26 @@ data class MosqueGlossaryTerm(
     @SerialName("arabic_variations") val arabicVariations: String = "",
     @SerialName("alternative_context_meanings")
     val alternativeContextMeanings: String = "",
+    @SerialName("approval_status") val approvalStatus: String = "APPROVED",
 )
 
 @Serializable
 data class TokenResponse(@SerialName("access_token") val accessToken: String)
+
+@Serializable
+data class GlossaryCandidate(
+    @SerialName("segment_id") val segmentId: String,
+    @SerialName("arabic_term") val arabicTerm: String,
+    val sentence: String,
+)
+
+@Serializable
+data class GlossaryContribution(
+    @SerialName("segment_id") val segmentId: String,
+    @SerialName("arabic_term") val arabicTerm: String,
+    @SerialName("literal_translation") val literalTranslation: String,
+    val meaning: String,
+)
 
 @Serializable
 data class User(
@@ -105,6 +129,11 @@ data class GlossaryTerm(
     val meaning: String,
     @SerialName("literal_translation") val literalTranslation: String,
     @SerialName("display_term") val displayTerm: String,
+    @SerialName("english_phrase") val englishPhrase: String = "",
+    @SerialName("localized_phrase") val localizedPhrase: String = "",
+    @SerialName("popup_phrase") val popupPhrase: String = "",
+    @SerialName("popup_language") val popupLanguage: String = "",
+    val transliteration: String = "",
     @SerialName("alternative_context_meanings")
     val alternativeContextMeanings: String = "",
     @SerialName("translation_start") val translationStart: Int? = null,
@@ -116,12 +145,21 @@ data class SermonSegment(
     val id: String,
     val ordinal: Int,
     @SerialName("arabic_text") val arabicText: String = "",
+    @SerialName("english_text") val englishText: String? = null,
     @SerialName("translated_text") val translatedText: String? = null,
     @SerialName("verification_status") val verificationStatus: String = "",
     val issues: List<String> = emptyList(),
     val citations: List<Citation> = emptyList(),
     @SerialName("glossary_terms") val glossaryTerms: List<GlossaryTerm> = emptyList(),
     @SerialName("reviewer_note") val reviewerNote: String? = null,
+)
+
+@Serializable
+data class SentenceAlignment(
+    @SerialName("translation_start") val translationStart: Int,
+    @SerialName("translation_end") val translationEnd: Int,
+    @SerialName("arabic_start") val arabicStart: Int,
+    @SerialName("arabic_end") val arabicEnd: Int,
 )
 
 @Serializable

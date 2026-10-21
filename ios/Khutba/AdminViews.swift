@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 import UniformTypeIdentifiers
 
 struct AdminHomeView: View {
@@ -151,7 +152,7 @@ private struct AdminSermonRow: View {
                             .foregroundStyle(.primary)
                             .multilineTextAlignment(.leading)
                         HStack {
-                            Text(sermon.khutbaDate)
+                            Text("\(sermon.khutbaDate) · \(sermon.targetLanguage.uppercased())")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                             StatusPill(status: sermon.status)
@@ -188,6 +189,7 @@ private struct AdminSermonRow: View {
 struct AdminSettingsView: View {
     @EnvironmentObject private var model: AppModel
     @State private var mosqueName = ""
+    @State private var mosqueCity = ""
     @State private var currentPassword = ""
     @State private var newPassword = ""
     @State private var confirmPassword = ""
@@ -199,7 +201,8 @@ struct AdminSettingsView: View {
     }
 
     private var canSaveName: Bool {
-        trimmedMosqueName.count >= 2 && trimmedMosqueName != model.adminMosque?.name
+        trimmedMosqueName.count >= 2 && mosqueCity.trimmingCharacters(in: .whitespacesAndNewlines).count >= 2 &&
+        (trimmedMosqueName != model.adminMosque?.name || mosqueCity != model.adminMosque?.city)
     }
 
     private var canChangePassword: Bool {
@@ -212,16 +215,13 @@ struct AdminSettingsView: View {
                 LazyVStack(spacing: 18) {
                     SectionHeading(
                         title: "Mosque profile",
-                        subtitle: "This name is shown to readers when they choose a mosque."
+                        subtitle: "Your name and city are shown to readers when they choose a mosque."
                     )
                     VStack(alignment: .leading, spacing: 13) {
                         TextField("Mosque name", text: $mosqueName)
                             .textFieldStyle(.roundedBorder)
-                        if let mosque = model.adminMosque {
-                            Text("\(mosque.city), \(mosque.country)")
-                                .foregroundStyle(.secondary)
-                        }
-                        Button("Save mosque name") { model.updateMosqueName(trimmedMosqueName) }
+                        TextField("City", text: $mosqueCity).textFieldStyle(.roundedBorder)
+                        Button("Save profile") { model.updateMosqueName(trimmedMosqueName, city: mosqueCity) }
                             .buttonStyle(.borderedProminent)
                             .controlSize(.large)
                             .frame(maxWidth: .infinity)
@@ -231,7 +231,7 @@ struct AdminSettingsView: View {
 
                     SectionHeading(
                         title: "Mosque glossary",
-                        subtitle: "Your entries override the built-in glossary for this mosque's future translations."
+                        subtitle: "New or edited entries need owner approval before they are used."
                     )
                     Button {
                         glossaryEditor = GlossaryEditorState(term: nil)
@@ -256,6 +256,8 @@ struct AdminSettingsView: View {
                                     .environment(\.layoutDirection, .rightToLeft)
                                 Text(term.literalTranslation)
                                     .font(.headline)
+                                Text(term.approvalStatus == "PENDING" ? "Awaiting approval" : term.approvalStatus == "REJECTED" ? "Rejected — edit to resubmit" : "Approved")
+                                    .font(.caption).foregroundStyle(.secondary)
                                 Text(term.meaning)
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
@@ -304,7 +306,7 @@ struct AdminSettingsView: View {
             .khutbaBackground()
             .navigationBarBackButtonHidden()
             .toolbar { ScreenHeader(title: "Mosque settings", backAction: model.back) }
-            .onAppear { mosqueName = model.adminMosque?.name ?? "" }
+            .onAppear { mosqueName = model.adminMosque?.name ?? ""; mosqueCity = model.adminMosque?.city ?? "" }
         }
         .sheet(item: $glossaryEditor) { editor in
             GlossaryEditorView(term: editor.term) { arabic, literal, meaning, variations, alternatives in
@@ -387,7 +389,7 @@ private struct GlossaryEditorView: View {
         NavigationStack {
             Form {
                 Section {
-                    Text("Use the exact Arabic word or expression. It is highlighted only when the verifier confirms that this sense fits the context.")
+                    Text("Use the exact Arabic word or expression. Readers tap the Arabic note to open its definition.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -434,9 +436,72 @@ private struct GlossaryEditorView: View {
     }
 }
 
+struct PostPublishDefinitionsView: View {
+    @EnvironmentObject private var model: AppModel
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 20) {
+                    Text("Your khutba is published").font(.title2.bold())
+                    Text("Add definitions for missing Arabic-marked terms to share with all mosques, or skip this step. Quoted passages are excluded.")
+                    Button("Refresh missing terms") {
+                        if let id = model.definitionSermonID { model.openDefinitions(sermonID: id) }
+                    }
+                    if model.glossaryCandidates.isEmpty && !model.isLoading {
+                        Text("No missing terms loaded. You can finish, or refresh to check again.")
+                            .foregroundStyle(.secondary)
+                    }
+                    ForEach(model.glossaryCandidates) { candidate in
+                        DefinitionContributionCard(candidate: candidate)
+                    }
+                }.padding(20)
+            }
+            .navigationTitle("Optional definitions")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("Skip / Finish", action: model.finishDefinitions)
+                        .disabled(model.isLoading)
+                }
+            }
+        }
+    }
+}
+
+private struct DefinitionContributionCard: View {
+    @EnvironmentObject private var model: AppModel
+    let candidate: GlossaryCandidate
+    @State private var phrase = ""
+    @State private var definition = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(candidate.arabicTerm).font(.title2)
+                .frame(maxWidth: .infinity, alignment: .trailing)
+            Text(candidate.sentence).textSelection(.enabled)
+            TextField("English phrase for the definition", text: $phrase, axis: .vertical)
+                .textFieldStyle(.roundedBorder)
+            Text("Copy the phrase immediately before the Arabic parentheses.")
+                .font(.caption).foregroundStyle(.secondary)
+            TextField("Definition in this context", text: $definition, axis: .vertical)
+                .lineLimit(3...8).textFieldStyle(.roundedBorder)
+            Button("Add to global glossary") {
+                model.saveDefinition(candidate, phrase: phrase, meaning: definition)
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(model.isLoading || phrase.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                || definition.trimmingCharacters(in: .whitespacesAndNewlines).count < 3)
+        }
+        .padding(16)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18))
+    }
+}
+
 struct AdminSermonView: View {
     @EnvironmentObject private var model: AppModel
     @State private var needsAttention = false
+    @State private var editedTitle = ""
 
     var body: some View {
         NavigationStack {
@@ -444,6 +509,27 @@ struct AdminSermonView: View {
                 if let sermon = model.selectedSermon {
                     LazyVStack(spacing: 16) {
                         SermonStatusView(sermon: sermon)
+                        VStack(alignment: .leading) {
+                            TextField("Khutba title", text: $editedTitle, axis: .vertical)
+                                .textFieldStyle(.roundedBorder)
+                            Button("Save title") { model.updateSermonTitle(sermonID: sermon.id, title: editedTitle) }
+                                .disabled(editedTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || editedTitle.count > 250 || editedTitle == sermon.title)
+                        }
+                        .disabled(sermon.status == SermonStatus.translating)
+                        .onAppear { editedTitle = sermon.title }
+                        .onChange(of: sermon.title) { _, value in editedTitle = value }
+                        if sermon.status == SermonStatus.published, let url = URL(string:"https://khutba-reader.abdohelmy1995.chatgpt.site/#review/\(sermon.id)") {
+                            Link("Record imam live (web)",destination:url).buttonStyle(.bordered)
+                        }
+                        if sermon.status == SermonStatus.published && sermon.targetLanguage == "en" {
+                            if sermon.targetLanguage == "en" {
+                                Button("Danish translation") { model.createDanish(sermonID: sermon.id) }
+                                    .buttonStyle(.borderedProminent)
+                            }
+                            Button("Add missing definitions") {
+                                model.openDefinitions(sermonID: sermon.id)
+                            }
+                        }
                         if model.translatingSermonID == sermon.id {
                             TranslationProgressView(
                                 completed: model.translatedSegments,
@@ -616,6 +702,38 @@ private struct SegmentReviewView: View {
     let segment: SermonSegment
     @State private var translation: String
     @State private var note: String
+    @State private var links: [SentenceAlignment] = []
+    @State private var selection = NSRange(location: 0, length: 0)
+    @State private var requestedAlignment = false
+    @State private var aligning = false
+    @State private var alignmentStatus = ""
+
+    private var selectedLinks: [SentenceAlignment] {
+        links.filter { link in
+            if selection.length == 0 {
+                return selection.location >= link.translationStart &&
+                    (selection.location < link.translationEnd || selection.location == translation.utf16.count && selection.location == link.translationEnd)
+            }
+            return link.translationStart < NSMaxRange(selection) && link.translationEnd > selection.location
+        }
+    }
+
+    private func loadAlignment() {
+        guard !aligning, !translation.isEmpty else { return }
+        requestedAlignment = true
+        aligning = true
+        let snapshot = translation
+        Task { @MainActor in
+            defer { aligning = false }
+            do {
+                let result = try await model.sentenceAlignment(sermonID: sermonID, segmentID: segment.id, text: snapshot)
+                links = movedAlignment(result, before: snapshot, after: translation)
+                alignmentStatus = result.isEmpty ? "No matching Arabic sentences found." : ""
+            } catch {
+                alignmentStatus = "Arabic highlighting could not load. You can keep editing or retry."
+            }
+        }
+    }
 
     init(sermonID: String, segment: SermonSegment) {
         self.sermonID = sermonID
@@ -635,19 +753,32 @@ private struct SegmentReviewView: View {
                 Text("Segment \(segment.ordinal + 1)")
                     .font(.headline)
             }
+            if let english = segment.englishText {
+                Text("Approved English").font(.headline)
+                Text(english)
+            }
             if let arabic = segment.arabicText, !arabic.isEmpty {
-                Text(arabic)
-                    .frame(maxWidth: .infinity, alignment: .trailing)
-                    .multilineTextAlignment(.trailing)
-                    .environment(\.layoutDirection, .rightToLeft)
+                Text("Original Arabic").font(.headline)
+                HighlightedArabicView(text: arabic, ranges: selectedLinks.map {
+                    NSRange(location: $0.arabicStart, length: $0.arabicEnd - $0.arabicStart)
+                })
+                .frame(height: 200)
             }
             VStack(alignment: .leading, spacing: 5) {
                 Text("Translation").font(.caption.bold()).foregroundStyle(.secondary)
-                TextEditor(text: $translation)
+                SelectionTrackingEditor(text: $translation, selection: $selection) {
+                    if !requestedAlignment { loadAlignment() }
+                }
                     .frame(minHeight: 130)
                     .padding(6)
                     .background(.background, in: RoundedRectangle(cornerRadius: 10))
                     .overlay { RoundedRectangle(cornerRadius: 10).stroke(.quaternary) }
+            }
+            if requestedAlignment {
+                if aligning { ProgressView("Finding the matching Arabic sentences…") }
+                Text(alignmentStatus.isEmpty ? (selectedLinks.isEmpty ? "No Arabic match for this sentence" : "Matching Arabic highlighted") : alignmentStatus)
+                    .font(.caption).foregroundStyle(.secondary)
+                Button("Refresh highlights") { loadAlignment() }.disabled(aligning)
             }
             if let issues = segment.issues, !issues.isEmpty {
                 Text("Model/verifier warnings")
@@ -688,8 +819,111 @@ private struct SegmentReviewView: View {
             .disabled(translation.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         }
         .khutbaCard()
-        .onChange(of: segment.translatedText) { _, value in translation = value ?? "" }
+        .onChange(of: translation) { previous, value in
+            links = movedAlignment(links, before: previous, after: value)
+        }
+        .onChange(of: segment.translatedText) { _, value in
+            translation = value ?? ""
+            links = []
+            requestedAlignment = false
+        }
         .onChange(of: segment.reviewerNote) { _, value in note = value ?? "" }
+    }
+}
+
+private func movedAlignment(_ links: [SentenceAlignment], before: String, after: String) -> [SentenceAlignment] {
+    if before == after { return links }
+    let old = Array(before.utf16), new = Array(after.utf16)
+    var start = 0, suffix = 0
+    while start < min(old.count, new.count), old[start] == new[start] { start += 1 }
+    while suffix < min(old.count, new.count) - start,
+          old[old.count - 1 - suffix] == new[new.count - 1 - suffix] { suffix += 1 }
+    let end = old.count - suffix, delta = new.count - old.count
+    return links.compactMap { original in
+        var link = original
+        let a = link.translationStart, b = link.translationEnd
+        if b <= start && !(start == end && b == start && b == old.count) { return link }
+        if a >= end && !(start == end && a == start) {
+            link.translationStart += delta; link.translationEnd += delta
+            return link
+        }
+        if a <= start && b >= end && b + delta > a {
+            link.translationEnd += delta
+            return link
+        }
+        return nil
+    }
+}
+
+private struct SelectionTrackingEditor: UIViewRepresentable {
+    @Binding var text: String
+    @Binding var selection: NSRange
+    var onFocus: () -> Void
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+    func makeUIView(context: Context) -> UITextView {
+        let view = UITextView()
+        view.font = .preferredFont(forTextStyle: .body)
+        view.backgroundColor = .clear
+        view.delegate = context.coordinator
+        view.text = text
+        view.accessibilityLabel = "Translation"
+        return view
+    }
+    func updateUIView(_ view: UITextView, context: Context) {
+        context.coordinator.parent = self
+        if view.text != text {
+            context.coordinator.updating = true
+            view.text = text
+            view.selectedRange = NSRange(location: min(selection.location, text.utf16.count), length: 0)
+            context.coordinator.updating = false
+        }
+    }
+    final class Coordinator: NSObject, UITextViewDelegate {
+        var parent: SelectionTrackingEditor
+        var updating = false
+        init(_ parent: SelectionTrackingEditor) { self.parent = parent }
+        func textViewDidBeginEditing(_ view: UITextView) { parent.onFocus() }
+        func textViewDidChange(_ view: UITextView) {
+            guard !updating else { return }
+            parent.text = view.text
+            parent.selection = view.selectedRange
+        }
+        func textViewDidChangeSelection(_ view: UITextView) {
+            guard !updating else { return }
+            parent.selection = view.selectedRange
+        }
+    }
+}
+
+private struct HighlightedArabicView: UIViewRepresentable {
+    let text: String
+    let ranges: [NSRange]
+
+    func makeUIView(context: Context) -> UITextView {
+        let view = UITextView()
+        view.isEditable = false
+        view.backgroundColor = .clear
+        view.textAlignment = .right
+        view.accessibilityLabel = "Original Arabic"
+        return view
+    }
+    func updateUIView(_ view: UITextView, context: Context) {
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.alignment = .right
+        paragraph.baseWritingDirection = .rightToLeft
+        let rendered = NSMutableAttributedString(string: text, attributes: [
+            .font: UIFont.preferredFont(forTextStyle: .body),
+            .foregroundColor: UIColor.label, .paragraphStyle: paragraph
+        ])
+        for range in ranges where range.location >= 0 && range.length > 0 && NSMaxRange(range) <= rendered.length {
+            rendered.addAttributes([
+                .backgroundColor: UIColor(red: 0.965, green: 0.863, blue: 0.541, alpha: 1),
+                .foregroundColor: UIColor.black
+            ], range: range)
+        }
+        if view.attributedText != rendered { view.attributedText = rendered }
+        if let range = ranges.first, NSMaxRange(range) <= rendered.length { view.scrollRangeToVisible(range) }
     }
 }
 

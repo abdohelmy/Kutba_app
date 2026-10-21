@@ -1,7 +1,20 @@
 import XCTest
+import UIKit
 @testable import Khutba
 
 final class KhutbaTests: XCTestCase {
+    func testLiveHighlightValidatesUtf16AndBridgesToNativeText() {
+        let text="🌙 Keep your promise."
+        let range=(text as NSString).range(of:"Keep your promise.")
+        let highlight=LiveHighlight(segmentId:"seg",start:range.location,end:NSMaxRange(range),excerpt:"Keep your promise.")
+        let rich=readerAttributedText(text:text,citations:[],glossaryTerms:[],liveHighlights:[highlight])
+        let native=NSAttributedString(rich)
+        XCTAssertEqual(native.string,text)
+        XCTAssertNotNil(native.attribute(.backgroundColor,at:range.location,effectiveRange:nil))
+        let stale=LiveHighlight(segmentId:"seg",start:range.location,end:NSMaxRange(range),excerpt:"Different text")
+        let rejected=NSAttributedString(readerAttributedText(text:text,citations:[],glossaryTerms:[],liveHighlights:[stale]))
+        XCTAssertNil(rejected.attribute(.backgroundColor,at:range.location,effectiveRange:nil))
+    }
     func testReaderTextRemovesInternalSourceMarkers() {
         XCTAssertEqual(
             sanitizedReaderText("Remember God [S:quran-2-152] , always."),
@@ -118,8 +131,32 @@ final class KhutbaTests: XCTestCase {
         let rendered = readerAttributedText(text: "🌙 \(phrase) (التقوى)", citations: [], glossaryTerms: [term], textSize: 24, searchQuery: phrase)
         let linked = rendered.runs.filter { $0.link?.host == "glossary" }
         XCTAssertEqual(linked.count, 1)
-        XCTAssertEqual(String(rendered[linked[0].range].characters), phrase)
-        XCTAssertNotNil(linked[0].backgroundColor)
+        XCTAssertEqual(String(rendered[linked[0].range].characters), "التقوى")
+        XCTAssertTrue(rendered.runs.contains { $0.backgroundColor != nil })
+    }
+
+    func testGlossaryNeverLinksEnglishWithoutArabicNote() {
+        let term = GlossaryTerm(arabicTerm: "التقوى", meaning: "Mindfulness",
+            literalTranslation: "God-consciousness", displayTerm: "God-consciousness",
+            alternativeContextMeanings: "", translationStart: nil, translationEnd: nil)
+        XCTAssertNil(glossaryArabicRange(text: "Cultivate God-consciousness.", term: term))
+        XCTAssertNil(glossaryArabicRange(text: "(التقوى) and (التقوى)", term: term))
+    }
+
+    func testGlossaryPopupFieldsAndCandidateDecode() throws {
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        let json = """
+        {"arabic_term":"التقوى","meaning":"Mindfulness","literal_translation":"piety",
+         "display_term":"التقوى","alternative_context_meanings":"",
+         "english_phrase":"God-consciousness","transliteration":"al-taqwa"}
+        """
+        let term = try decoder.decode(GlossaryTerm.self, from: Data(json.utf8))
+        XCTAssertEqual(term.englishPhrase, "God-consciousness")
+        XCTAssertEqual(term.transliteration, "al-taqwa")
+        let candidate = try decoder.decode(GlossaryCandidate.self, from: Data(
+            #"{"segment_id":"s","arabic_term":"كلمة","sentence":"A word (كلمة)."}"#.utf8))
+        XCTAssertEqual(candidate.segmentId, "s")
     }
 
     func testOfflineCachePersistsSourcePopupsAndRemovesWithdrawnCopies() async throws {

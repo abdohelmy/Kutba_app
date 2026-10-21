@@ -1,0 +1,5 @@
+import {api} from "./khutba";
+export type LiveHighlight={segment_id:string;start:number;end:number;excerpt:string;tentative?:boolean;basis?:"timer"|"words"};
+export type LiveState={active:boolean;status:string;provisional?:boolean;session_id?:string;sequence:number;audio_sequence?:number;highlights:LiveHighlight[];tentative_highlights?:LiveHighlight[];worker_ready?:boolean;mapping_ready?:boolean;preparing?:boolean;preparation_error?:string};
+export const liveStatus=(state?:LiveState)=>!state?.active?"No live session":state.status==="paused"?"Live session paused":state.status==="worker_offline"?"Speech worker disconnected":state.status==="mapping_required"?"Passage mapping needs preparation":state.provisional?"Opening shown · locating the imam":state.status==="waiting_for_audio"?"Waiting for microphone audio":state.tentative_highlights?.length?"Checking the next passage · yellow is tentative":state.status==="matched"?"Following the imam":"Waiting for a clear match";
+export async function getLive(id:string){return api<LiveState>(`reader/sermons/${id}/live`);}

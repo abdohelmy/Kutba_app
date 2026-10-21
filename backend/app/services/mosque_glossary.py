@@ -2,9 +2,11 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models import MosqueGlossaryTerm
+from app.models.entities import GlobalGlossaryTerm
 from app.services.glossary import (
     GlossaryEntry,
     build_glossary_entry,
+    load_glossary,
     merge_glossary_entries,
 )
 
@@ -12,7 +14,10 @@ from app.services.glossary import (
 def glossary_entries_for_mosque(db: Session, mosque_id: str) -> tuple[GlossaryEntry, ...]:
     records = db.scalars(
         select(MosqueGlossaryTerm)
-        .where(MosqueGlossaryTerm.mosque_id == mosque_id)
+        .where(
+            MosqueGlossaryTerm.mosque_id == mosque_id,
+            MosqueGlossaryTerm.approval_status == "APPROVED",
+        )
         .order_by(MosqueGlossaryTerm.created_at, MosqueGlossaryTerm.id)
     )
     custom = tuple(
@@ -25,4 +30,12 @@ def glossary_entries_for_mosque(db: Session, mosque_id: str) -> tuple[GlossaryEn
         )
         for record in records
     )
-    return merge_glossary_entries(custom)
+    shared = tuple(
+        build_glossary_entry(row.arabic_term, row.meaning, row.literal_translation)
+        for row in db.scalars(
+            select(GlobalGlossaryTerm)
+            .where(GlobalGlossaryTerm.approval_status == "APPROVED")
+            .order_by(GlobalGlossaryTerm.created_at)
+        )
+    )
+    return merge_glossary_entries(custom, merge_glossary_entries(shared, load_glossary()))

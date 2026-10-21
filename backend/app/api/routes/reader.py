@@ -15,7 +15,15 @@ from app.schemas.content import (
     SermonSummaryResponse,
 )
 from app.services.canonical_sources import quran_passage_is_embedded_in_hadith
-from app.services.glossary import glossary_matches
+from app.services.danish import english_is_current
+from app.services.glossary import (
+    PARENTHETICAL_RE,
+    glossary_matches,
+    popup_context_from_text,
+    quotation_glossary_spans,
+)
+from app.services.glossary_phrases import phrase_at_note
+from app.services.glossary_transliteration import transliterate_letters
 from app.services.mosque_glossary import glossary_entries_for_mosque
 from app.services.sermon_pdf import build_sermon_pdf
 
@@ -81,6 +89,9 @@ def list_published_sermons(
     language: str | None = Query(default=None, min_length=2, max_length=16),
     db: Session = Depends(get_db),
 ) -> list[Sermon]:
+    mosque = db.get(Mosque, mosque_id)
+    if not mosque or not mosque.is_active or mosque.approval_status != "APPROVED":
+        raise HTTPException(404, "Mosque not found")
     query = (
         select(Sermon)
         .where(Sermon.mosque_id == mosque_id, Sermon.status == SermonStatus.PUBLISHED)
@@ -88,7 +99,7 @@ def list_published_sermons(
     )
     if language:
         query = query.where(Sermon.target_language == language)
-    return list(db.scalars(query))
+    return [sermon for sermon in db.scalars(query) if english_is_current(sermon, db)]
 
 
 def _published_sermon(sermon_id: str, db: Session) -> Sermon:
@@ -97,8 +108,11 @@ def _published_sermon(sermon_id: str, db: Session) -> Sermon:
         .options(selectinload(Sermon.segments))
         .where(Sermon.id == sermon_id, Sermon.status == SermonStatus.PUBLISHED)
     )
-    if sermon is None:
+    if sermon is None or not english_is_current(sermon, db):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Published sermon not found")
+    mosque = db.get(Mosque, sermon.mosque_id)
+    if not mosque or not mosque.is_active or mosque.approval_status != "APPROVED":
+        raise HTTPException(404, "Published sermon not found")
     return sermon
 
 
@@ -109,24 +123,53 @@ def _reader_sermon_response(sermon: Sermon, db: Session) -> ReaderSermonDetailRe
     segments = []
     for segment in sermon.segments:
         translated_text = segment.translated_text or ""
-        terms = glossary_matches(
+        terms = [] if sermon.target_language == "da" else glossary_matches(
             segment.arabic_text,
             translated_text,
             seen_terms,
             glossary_catalog,
+            protected_spans=quotation_glossary_spans(translated_text, segment.citations),
+            arabic_only=True,
+            popup_phrases=segment.localized_glossary,
         )
+        localized_terms = []
+        if sermon.target_language == "da":
+            for term in segment.localized_glossary or []:
+                key = term["arabic_term"]
+                if key in seen_terms:
+                    continue
+                occurrences = [m for m in PARENTHETICAL_RE.finditer(translated_text)
+                               if m.group("arabic").strip() == key]
+                occurrence = term.get("arabic_occurrence", 0)
+                note = occurrences[occurrence] if 0 <= occurrence < len(occurrences) else None
+                if note:
+                    preceding = translated_text[:note.start()].rstrip()
+                    phrase = term.get("localized_phrase", "")
+                    heading = (phrase_at_note(preceding, phrase)
+                               or popup_context_from_text(preceding))
+                    start = note.start("arabic") + len(note.group("arabic")) - len(
+                        note.group("arabic").lstrip())
+                    localized_terms.append(GlossaryTermResponse(**dict(
+                        term, display_term=key, localized_phrase=heading,
+                        popup_phrase=heading, popup_language='da', translation_start=start,
+                        translation_end=start + len(key))))
+                    seen_terms.add(key)
         segments.append(
             ReaderSegmentResponse(
                 id=segment.id,
                 ordinal=segment.ordinal,
                 translated_text=translated_text,
                 citations=_deduplicate_reader_citations(segment.citations),
-                glossary_terms=[
+                glossary_terms=localized_terms if sermon.target_language == "da" else [
                     GlossaryTermResponse(
                         arabic_term=match.arabic_term,
                         meaning=match.entry.meaning,
                         literal_translation=match.literal_translation,
                         display_term=match.display_term,
+                        english_phrase=match.english_phrase,
+                        popup_phrase=match.english_phrase,
+                        popup_language='en',
+                        transliteration=transliterate_letters(match.arabic_term),
                         alternative_context_meanings=(match.entry.alternative_context_meanings),
                         translation_start=match.translation_start,
                         translation_end=match.translation_end,
